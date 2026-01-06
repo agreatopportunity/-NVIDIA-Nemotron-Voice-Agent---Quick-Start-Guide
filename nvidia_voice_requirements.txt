@@ -1,0 +1,41 @@
+# NVIDIA Nemotron Voice Agent Requirements
+# For: RTX 4060 Ti (16GB) + Titan V (12GB) + 64GB RAM
+
+# PyTorch with CUDA 12.4 (install separately)
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# NVIDIA NeMo for ASR
+nemo_toolkit[asr]>=2.0.0
+Cython
+packaging
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.0
+webrtcvad>=2.0.10
+pyaudio>=0.2.14
+
+# LLM inference (llama.cpp with CUDA)
+# Install with: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+llama-cpp-python>=0.3.0
+
+# Alternative: vLLM for transformer models
+vllm>=0.6.0
+
+# Voice agent framework
+pipecat-ai[silero,websockets]>=0.0.50
+
+# WebSocket and HTTP servers
+websockets>=12.0
+aiohttp>=3.9.0
+fastapi>=0.115.0
+uvicorn>=0.32.0
+
+# HuggingFace for model downloads
+huggingface_hub[cli]>=0.26.0
+transformers>=4.46.0
+
+# Utilities
+numpy>=1.24.0
+scipy>=1.11.0
+pydantic>=2.0.0
