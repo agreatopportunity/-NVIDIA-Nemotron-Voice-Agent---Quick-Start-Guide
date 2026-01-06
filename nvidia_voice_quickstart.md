@@ -41,6 +41,12 @@ pip install Cython && pip install nemo_toolkit[asr]
 # 4. Install llama.cpp with multi-GPU CUDA support
 CMAKE_ARGS="-DGGML_CUDA=on -DGGML_CUDA_F16=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
 
+# I did this one:
+# Build with CUDA 11.8 (Volta=70 for Titan V, Ampere=86 for 4060 Ti)
+CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=70;86" \
+FORCE_CMAKE=1 \
+pip install llama-cpp-python --force-reinstall --no-cache-dir
+
 # 5. Install remaining dependencies
 pip install websockets aiohttp fastapi uvicorn pyaudio soundfile huggingface_hub[cli] pipecat-ai[silero]
 ```
