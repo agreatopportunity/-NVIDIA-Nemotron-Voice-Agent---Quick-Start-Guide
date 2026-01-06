@@ -1,6 +1,6 @@
 # NVIDIA Nemotron Voice Agent - Quick Start Guide
 
-## Your Hardware
+## Hardware I Used
 
 | Component | Specs | Role |
 |-----------|-------|------|
