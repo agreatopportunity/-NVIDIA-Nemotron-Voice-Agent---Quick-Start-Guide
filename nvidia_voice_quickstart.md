@@ -16,12 +16,12 @@
 ┌─────────────────────────────────────────────────────────┐
 │                     SYSTEM                              │
 ├────────────────────────┬────────────────────────────────┤
-│   GPU 0: 4060 Ti       │      GPU 1: Titan V           │
-│   (16GB VRAM)          │      (12GB VRAM)              │
+│   GPU 0: 4060 Ti       │      GPU 1: Titan V            │
+│   (16GB VRAM)          │      (12GB VRAM)               │
 ├────────────────────────┼────────────────────────────────┤
-│ • Nemotron ASR (2GB)   │ • Nemotron Nano 9B Q4 (8GB)   │
-│ • Magpie TTS (1GB)     │   OR                          │
-│ • ~13GB FREE           │ • Nemotron 30B IQ3 (12GB)     │
+│ • Nemotron ASR (2GB)   │ • Nemotron Nano 9B Q4 (8GB)    │
+│ • Magpie TTS (1GB)     │   OR                           │
+│ • ~13GB FREE           │ • Nemotron 30B IQ3 (12GB)      │
 └────────────────────────┴────────────────────────────────┘
 ```
 
