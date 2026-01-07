@@ -248,6 +248,131 @@ python nemotron_voice_agent.py --think
 | `clear` | Clear conversation history |
 | `quit` | Exit |
 
+
+# Start the voice agent
+python nemotron_voice_agent.py
+```
+
+## Example Session
+```
+============================================================
+🚀 NVIDIA Nemotron Voice Agent
+============================================================
+Device: cuda:0
+PyTorch CUDA: 11.8
+GPU: NVIDIA GeForce RTX 4060 Ti
+============================================================
+
+📝 Loading Nemotron Speech ASR...
+   ✓ ASR loaded (2.14 GB VRAM)
+🧠 Loading Nemotron Nano 9B (4-bit)...
+   ✓ LLM loaded (5.92 GB VRAM)
+🔊 Loading Silero TTS...
+   ✓ TTS loaded (6.43 GB VRAM)
+
+✅ All models loaded in 45.2s
+📊 Total VRAM used: 9.87 GB
+============================================================
+
+🎤 Voice Agent Ready!
+----------------------------------------
+Commands:
+  ENTER     - Start/stop recording
+  'text'    - Switch to text input mode
+  'voice'   - Switch to voice input mode
+  'clear'   - Clear conversation history
+  'quit'    - Exit
+----------------------------------------
+```
+
+---
+
+### Command: `ENTER` (Voice Recording)
+```
+🎤 Press ENTER to start recording...
+[Press ENTER]
+
+🔴 Recording... (press ENTER to stop)
+[Speak: "What's the weather like in Missouri?"]
+[Press ENTER]
+
+⏹️  Recording stopped
+   📝 Transcribing...
+   ✓ ASR: 0.24s
+   🧠 Thinking...
+   ✓ LLM: 1.83s
+   🔊 Synthesizing...
+   ✓ TTS: 0.45s
+
+👤 You: What's the weather like in Missouri?
+🤖 Assistant: I don't have access to real-time weather data, but Missouri typically has a continental climate with hot summers and cold winters. For current conditions, I'd recommend checking a weather service.
+
+🔊 Playing response...
+[Audio plays through speakers]
+```
+
+---
+
+### Command: `text` (Switch to Text Mode)
+```
+🎤 Press ENTER to start recording...
+text
+
+🎤 Switched to text mode
+
+👤 You: What is blockchain?
+   🧠 Thinking...
+🤖 Assistant: Blockchain is a distributed digital ledger technology that records transactions across multiple computers. Each block contains transaction data and is cryptographically linked to the previous block, making the chain tamper-resistant and transparent.
+
+   🔊 Speak response? (y/N): y
+[Audio plays through speakers]
+
+👤 You: Explain it simpler
+   🧠 Thinking...
+🤖 Assistant: Think of blockchain like a shared Google Doc that everyone can see but nobody can secretly edit. Every change is recorded permanently and everyone has the same copy.
+
+   🔊 Speak response? (y/N): n
+
+👤 You: 
+```
+
+---
+
+### Command: `voice` (Switch Back to Voice Mode)
+```
+👤 You: voice
+
+🎤 Switched to voice mode
+
+🎤 Press ENTER to start recording...
+[Press ENTER]
+
+🔴 Recording... (press ENTER to stop)
+```
+
+---
+
+### Command: `clear` (Clear Conversation History)
+```
+👤 You: clear
+
+   🗑️  Conversation history cleared
+
+👤 You: Who am I?
+   🧠 Thinking...
+🤖 Assistant: I don't have any information about who you are. This is the start of our conversation. How can I help you today?
+```
+
+---
+
+### Command: `quit` (Exit)
+```
+👤 You: quit
+
+👋 Goodbye!
+
+---
+
 ## Performance Results
 
 | Metric | Value |
