@@ -45,9 +45,9 @@ All models run on **GPU 0 (4060 Ti)** with ~6GB free VRAM:
 
 ```bash
 cd ~/ai
-mkdir speechAi && cd speechAi
-python3.11 -m venv speechAi
-source speechAi/bin/activate
+mkdir speachAi && cd speachAi
+python3.11 -m venv speachAi
+source speachAi/bin/activate
 pip install --upgrade pip
 ```
 
