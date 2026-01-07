@@ -21,17 +21,3 @@ python nemotron_web_server.py
 
 # Open in browser
 # http://localhost:8000
-
-
-# Import and use
-import NemotronVoiceUI from './components/NemotronVoiceUI';
-API Endpoints (when using server)
-EndpointMethodDescription/GETServe web UI/chatPOSTText chat/chat/speakPOSTChat + TTS audio/transcribePOSTUpload audio for ASR/synthesizePOSTText to speech/ws/voiceWebSocketReal-time voice/healthGETServer status
-Mobile Experience
-The UI is fully touch-optimized:
-
-Large touch targets (44px+ buttons)
-Swipe-friendly scrolling
-No hover-dependent interactions
-Viewport meta tag prevents zoom issues
-Responsive font sizes with clamp()
