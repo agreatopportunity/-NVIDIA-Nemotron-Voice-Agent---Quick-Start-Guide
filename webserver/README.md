@@ -15,6 +15,7 @@ cp ~/Downloads/nemotron_web_server.py .
 
 # Install FastAPI if needed
 pip install fastapi uvicorn python-multipart
+pip install python-dotenv httpx --break-system-packages
 
 # Run the server
 python nemotron_web_server.py
