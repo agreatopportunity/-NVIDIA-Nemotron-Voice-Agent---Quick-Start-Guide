@@ -370,7 +370,7 @@ text
 👤 You: quit
 
 👋 Goodbye!
-
+```
 ---
 
 ## Performance Results
