@@ -228,14 +228,20 @@ print(f'✓ Generated {len(audio)/48000:.2f}s of audio')
 ## Run the Voice Agent
 
 ```bash
-# Run component tests first
-python test_components.py
-
-# Run the full voice agent
+# Show menu (default)
 python nemotron_voice_agent.py
 
-# With reasoning mode enabled
+# Skip menu - start in text mode
+python nemotron_voice_agent.py --text
+
+# Skip menu - start in voice mode  
+python nemotron_voice_agent.py --voice
+
+# Enable reasoning + show menu
 python nemotron_voice_agent.py --think
+
+# Combine flags
+python nemotron_voice_agent.py --text --think
 ```
 
 ### Voice Agent Commands
