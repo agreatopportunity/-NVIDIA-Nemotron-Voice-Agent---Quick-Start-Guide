@@ -251,7 +251,7 @@ python nemotron_voice_agent.py --think
 
 # Start the voice agent
 python nemotron_voice_agent.py
-```
+
 
 ## Example Session
 ```
@@ -370,7 +370,7 @@ text
 👤 You: quit
 
 👋 Goodbye!
-```
+
 ---
 
 ## Performance Results
