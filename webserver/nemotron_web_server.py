@@ -15,6 +15,7 @@ Endpoints:
 
 import os
 import sys
+import re
 import json
 import time
 import wave
@@ -194,17 +195,51 @@ class ModelManager:
     def synthesize(self, text: str) -> bytes:
         """Synthesize speech and return WAV bytes."""
         import numpy as np
+        import io
         
-        audio = self.tts_model.apply_tts(
-            text=text,
-            speaker="en_0",
-            sample_rate=48000
-        )
+        # 1. Get a local handle (Use local variable to prevent 'None' overwrite issues)
+        active_model = self.tts_model
+        
+        # 2. If missing, load it LOCALLY first
+        if active_model is None:
+            print("⚠️ TTS Model missing. Loading locally...")
+            try:
+                # Load the model
+                loaded_model, _ = torch.hub.load(
+                    repo_or_dir='snakers4/silero-models',
+                    model='silero_tts',
+                    language='en',
+                    speaker='v3_en'
+                )
+                
+                # Try moving to GPU, but don't lose the object if it fails
+                try:
+                    loaded_model.to(config.device)
+                except Exception as gpu_error:
+                    print(f"⚠️ GPU move failed, keeping on CPU: {gpu_error}")
+                
+                # Assign to local variable AND class state
+                active_model = loaded_model
+                self.tts_model = active_model
+                print("✅ TTS Model reloaded and secured.")
+                
+            except Exception as e:
+                print(f"❌ CRITICAL: Failed to load TTS: {e}")
+                raise HTTPException(status_code=500, detail=f"TTS Load Failed: {e}")
+
+        # 3. Generate using the LOCAL variable (Guaranteed to be valid now)
+        try:
+            audio = active_model.apply_tts(
+                text=text,
+                speaker="en_0",
+                sample_rate=48000
+            )
+        except Exception as e:
+             raise HTTPException(status_code=500, detail=f"Generation Failed: {e}")
         
         audio_np = audio.cpu().numpy()
         
         # Create WAV in memory
-        import io
         buffer = io.BytesIO()
         with wave.open(buffer, 'wb') as wav_file:
             wav_file.setnchannels(1)
@@ -289,16 +324,29 @@ async def chat_with_speech(request: ChatRequest):
         raise HTTPException(status_code=503, detail="Models not loaded")
     
     try:
-        # Generate response
+        # 1. Generate full response (with emojis/markdown) for the UI
         response_text = models.generate(request.message, request.history)
         
-        # Synthesize speech
-        audio_bytes = models.synthesize(response_text)
+        # 2. Create a clean version for TTS
+        # Remove markdown bolding (**text**)
+        tts_text = re.sub(r'\*\*(.*?)\*\*', r'\1', response_text)
+        # Remove emojis and special chars (keep only alphanumeric and basic punctuation)
+        tts_text = re.sub(r'[^\w\s,.:;?!-\']', '', tts_text)
+        # Collapse multiple spaces
+        tts_text = re.sub(r'\s+', ' ', tts_text).strip()
+        
+        # 3. Synthesize the clean text
+        # If text is empty after cleaning (e.g. user sent only emojis), use a fallback
+        if not tts_text:
+            tts_text = "I cannot read that response aloud."
+
+        audio_bytes = models.synthesize(tts_text)
         audio_base64 = base64.b64encode(audio_bytes).decode()
         
         return ChatResponse(response=response_text, audio_base64=audio_base64)
         
     except Exception as e:
+        print(f"Server Error: {str(e)}") # Print error to your terminal for debugging
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/transcribe")
