@@ -1,41 +1,77 @@
 # NVIDIA Nemotron Voice Agent Requirements
-# For: RTX 4060 Ti (16GB) + Titan V (12GB) + 64GB RAM
+# Tested on: RTX 4060 Ti (16GB) + Titan V (12GB) + 64GB RAM
+# CUDA Toolkit: 11.8
+# OS: Ubuntu 22.04
+# Python: 3.11
 
-# PyTorch with CUDA 12.4 (install separately)
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# ==============================================================================
+# PyTorch with CUDA 11.8 (install first, separately)
+# ==============================================================================
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# Verify with:
+# python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}')"
+# Expected: PyTorch: 2.7.1+cu118, CUDA: 11.8
 
+# ==============================================================================
 # NVIDIA NeMo for ASR
-nemo_toolkit[asr]>=2.0.0
+# ==============================================================================
 Cython
-packaging
+nemo_toolkit[asr]
 
-# Audio processing
-librosa>=0.10.0
-soundfile>=0.12.0
-webrtcvad>=2.0.10
+# ==============================================================================
+# Transformers + Quantization (for Nemotron Nano 9B)
+# ==============================================================================
+transformers>=4.53.0
+accelerate>=0.30.0
+sentencepiece
+protobuf
+bitsandbytes>=0.49.0
+
+# Mamba-SSM for Nemotron's hybrid architecture
+# Install with: pip install causal-conv1d && pip install mamba-ssm --no-build-isolation
+causal-conv1d>=1.5.0
+# mamba-ssm>=2.2.6  # Install separately with --no-build-isolation
+
+# ==============================================================================
+# Audio Processing
+# ==============================================================================
+# System dependency: sudo apt install portaudio19-dev
 pyaudio>=0.2.14
+soundfile>=0.12.0
+librosa>=0.10.0
+numpy>=1.26.0
 
-# LLM inference (llama.cpp with CUDA)
-# Install with: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
-llama-cpp-python>=0.3.0
+# ==============================================================================
+# TTS (Silero - downloaded via torch.hub)
+# ==============================================================================
+# No pip install needed - loaded via:
+# torch.hub.load('snakers4/silero-models', model='silero_tts', language='en', speaker='v3_en')
 
-# Alternative: vLLM for transformer models
-vllm>=0.6.0
+# ==============================================================================
+# HuggingFace Tools
+# ==============================================================================
+huggingface_hub[cli]>=0.36.0
 
-# Voice agent framework
-pipecat-ai[silero,websockets]>=0.0.50
-
-# WebSocket and HTTP servers
+# ==============================================================================
+# Web/API Server (optional - for serving models)
+# ==============================================================================
 websockets>=12.0
 aiohttp>=3.9.0
 fastapi>=0.115.0
 uvicorn>=0.32.0
 
-# HuggingFace for model downloads
-huggingface_hub[cli]>=0.26.0
-transformers>=4.46.0
-
+# ==============================================================================
 # Utilities
-numpy>=1.24.0
-scipy>=1.11.0
+# ==============================================================================
+einops>=0.8.0
+packaging>=24.0
 pydantic>=2.0.0
+tqdm>=4.67.0
+
+# ==============================================================================
+# NOT USED (architecture not yet supported)
+# ==============================================================================
+# llama-cpp-python  # nemotron_h architecture not supported yet
+# vllm              # Not needed when using transformers + bitsandbytes
+# pipecat-ai        # Optional voice agent framework
