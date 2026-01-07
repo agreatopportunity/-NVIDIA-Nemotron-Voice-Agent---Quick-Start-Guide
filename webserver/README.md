@@ -20,5 +20,8 @@ pip install python-dotenv httpx --break-system-packages
 # Run the server
 python nemotron_web_server.py
 
+# Enable reasoning
+python nemotron_web_server.py --think
+
 # Open in browser
-# http://localhost:8000
+http://localhost:8000
