@@ -17,7 +17,9 @@ Usage:
     python nemotron_web_server.py --port 5050
 
 Environment Variables (.env file):
-    OPENWEATHER_API_KEY=your_key_here
+    OPENWEATHER_API_KEY=YOUR_API_KEY
+    GOOGLE_API_KEY=YOUR_API_KEY
+    GOOGLE_CSE_ID=YOUR_CSE_ID
 """
 
 import os
