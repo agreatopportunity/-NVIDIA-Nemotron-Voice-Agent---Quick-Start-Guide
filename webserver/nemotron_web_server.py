@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Nemotron Voice Agent - Web API Server v2.0
+Nemotron Voice Agent - Web API Server
 ===========================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, and DateTime.
 
@@ -84,8 +84,8 @@ class ServerConfig:
     openweather_api_key: str = field(default_factory=lambda: os.getenv("OPENWEATHER_API_KEY", ""))
     
     # User location settings
-    user_city: str = "Chicago"
-    user_state: str = "Illinois"
+    user_city: str = "Branson"
+    user_state: str = "Missouri"
     user_country: str = "US"
     user_timezone: str = "America/Chicago"
 
@@ -765,6 +765,22 @@ async def serve_ui():
     if ui_path.exists():
         return HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
     return HTMLResponse(content="<h1>UI not found. Place nemotron_web_ui.html in the same directory.</h1>")
+
+@app.get("/sw.js")
+async def serve_service_worker():
+    """Serve the service worker for PWA functionality."""
+    from fastapi.responses import Response
+    sw_path = Path(__file__).parent / "sw.js"
+    if sw_path.exists():
+        return Response(
+            content=sw_path.read_text(encoding="utf-8"),
+            media_type="application/javascript"
+        )
+    # Return empty service worker if file doesn't exist
+    return Response(
+        content="// Service worker placeholder\nself.addEventListener('fetch', () => {});",
+        media_type="application/javascript"
+    )
 
 @app.get("/health")
 async def health_check():
