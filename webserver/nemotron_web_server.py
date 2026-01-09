@@ -523,20 +523,34 @@ class ModelManager:
 Format: <think>analysis</think> spoken answer."""
             full_system = f"{thinking_instruction}\n\n{system_prompt}"
         else:
-            # FAST CHAT MODE (Strict No-Thinking)
-            no_think_instruction = """YOU ARE IN FAST CHAT MODE.
-- DO NOT generate internal thoughts.
-- DO NOT say "Okay, let me think" or "The user wants..."
-- Just give the answer directly and concisely."""
+            # FAST CHAT MODE (Strict No-Thinking) 
+            no_think_instruction = """CRITICAL: OUTPUT ONLY YOUR SPOKEN RESPONSE.
+
+FORBIDDEN (never output these):
+- "Okay, the user is asking..."
+- "Let me think..."  
+- "I should respond with..."
+- "First, I need to..."
+- Any internal reasoning or planning
+
+CORRECT FORMAT:
+User: "Hello, what time is it?"
+You: "It's 5:30 PM on Friday!"
+
+User: "What's the weather?"
+You: "It's 72 degrees and sunny in Branson!"
+
+Start your response with the ACTUAL ANSWER, not with thinking."""
             full_system = f"{no_think_instruction}\n\n{system_prompt}"
         
         messages = [{"role": "system", "content": full_system}]
         
-        # Add conversation history (limit to last 6 for speed)
+        # Add conversation history (limit to last 4 for speed in fast mode)
+        history_limit = 6 if should_think else 4
         if history:
-            messages.extend(history[-6:])
+            messages.extend(history[-history_limit:])
         else:
-            messages.extend(self.conversation_history[-6:])
+            messages.extend(self.conversation_history[-history_limit:])
         
         messages.append({"role": "user", "content": user_input})
         
@@ -550,8 +564,13 @@ Format: <think>analysis</think> spoken answer."""
         # Create attention mask
         attention_mask = torch.ones_like(inputs).to(config.device)
         
-        # Dynamic token limit: more for thinking mode, less for fast chat
-        max_tokens = 512 if should_think else 200
+        # Dynamic settings based on mode
+        if should_think:
+            max_tokens = 512
+            temperature = 0.7
+        else:
+            max_tokens = 150  # Shorter for fast, direct responses
+            temperature = 0.5  # More deterministic
         
         # Generate
         with torch.no_grad():
@@ -560,7 +579,7 @@ Format: <think>analysis</think> spoken answer."""
                 attention_mask=attention_mask,
                 max_new_tokens=max_tokens,
                 do_sample=True,
-                temperature=config.llm_temperature,
+                temperature=temperature,
                 top_p=0.9,
                 pad_token_id=self.llm_tokenizer.eos_token_id,
                 use_cache=True,
@@ -571,13 +590,16 @@ Format: <think>analysis</think> spoken answer."""
             skip_special_tokens=True
         ).strip()
         
-        print(f"🤖 Raw LLM Response ({len(full_response)} chars, max_tokens={max_tokens}):\n{full_response[:500]}...")
+        print(f"🤖 Raw LLM Response ({len(full_response)} chars, tokens={max_tokens}, temp={temperature}):\n{full_response[:500]}...")
         
         # =====================================================
         # EXTRACT THINKING VS SPOKEN ANSWER
         # =====================================================
         thinking_content = None
         spoken_response = full_response
+        
+        # Normalize user input for comparison
+        user_input_lower = user_input.lower().strip()
         
         # Pattern 1: Explicit <think>...</think> tags
         think_match = re.search(r'<think>(.*?)</think>', full_response, flags=re.DOTALL | re.IGNORECASE)
@@ -618,19 +640,62 @@ Format: <think>analysis</think> spoken answer."""
         elif re.match(r'^(Okay|Let me|The user|I need|I should|First|So,|Alright|Hmm|Well,)', full_response, re.IGNORECASE):
             print("⚠️ No tags, model thinking out loud...")
             
-            # Try to find quoted answer
-            quote_match = re.search(r'"([^"]{15,}[.!?])"', full_response)
-            if quote_match:
-                spoken_response = quote_match.group(1)
+            # Find ALL quoted strings in the response
+            all_quotes = re.findall(r'"([^"]{10,})"', full_response)
+            
+            # Filter out quotes that match/contain the user's input
+            valid_quotes = []
+            for quote in all_quotes:
+                quote_lower = quote.lower().strip()
+                # Skip if quote is very similar to user input
+                if quote_lower in user_input_lower or user_input_lower in quote_lower:
+                    print(f"   Skipping quote (matches user input): {quote[:30]}...")
+                    continue
+                # Skip if quote starts with reasoning patterns
+                if re.match(r'^(okay|let me|the user|i need|i should|first|so,|wait)', quote_lower):
+                    print(f"   Skipping quote (reasoning pattern): {quote[:30]}...")
+                    continue
+                valid_quotes.append(quote)
+            
+            if valid_quotes:
+                # Prefer the LAST valid quote (usually the final answer)
+                spoken_response = valid_quotes[-1]
                 thinking_content = full_response
-                print(f"✓ Found quoted answer")
+                print(f"✓ Found valid quoted answer: {spoken_response[:50]}...")
             else:
-                # Fallback: last sentence is usually the answer
-                sentences = re.split(r'(?<=[.!?])\s+', full_response)
-                if len(sentences) > 1:
-                    spoken_response = sentences[-1]
-                    thinking_content = ' '.join(sentences[:-1])
-                    print(f"✓ Using last sentence as answer")
+                # No valid quotes - try to find text after answer-indicating phrases
+                answer_patterns = [
+                    r'(?:respond with|say something like|answer is|I\'ll say|should be)[:\s]*["\']?([^"\']{15,}[.!?])["\']?',
+                    r'(?:Final response|My response)[:\s]*["\']?([^"\']{15,}[.!?])["\']?',
+                ]
+                
+                found_answer = False
+                for pattern in answer_patterns:
+                    match = re.search(pattern, full_response, re.IGNORECASE)
+                    if match:
+                        spoken_response = match.group(1).strip()
+                        thinking_content = full_response
+                        print(f"✓ Found answer after indicator phrase")
+                        found_answer = True
+                        break
+                
+                if not found_answer:
+                    # Last resort: use the LAST sentence that doesn't look like reasoning
+                    sentences = re.split(r'(?<=[.!?])\s+', full_response)
+                    
+                    for sent in reversed(sentences):
+                        sent_lower = sent.lower().strip()
+                        # Skip reasoning sentences
+                        if re.match(r'^(okay|let me|the user|i need|i should|first|so,|also|wait|next|that)', sent_lower):
+                            continue
+                        # Skip sentences mentioning "user" or "response"
+                        if 'the user' in sent_lower or 'my response' in sent_lower or 'i should' in sent_lower:
+                            continue
+                        # This looks like a valid answer
+                        spoken_response = sent
+                        thinking_content = full_response
+                        print(f"✓ Using last non-reasoning sentence: {sent[:50]}...")
+                        break
         
         # Pattern 4: Clean response first, then reasoning (Answer\n\nThinking pattern)
         elif '\n\n' in full_response:
@@ -646,13 +711,16 @@ Format: <think>analysis</think> spoken answer."""
 
         # Final cleanup
         if spoken_response:
+            # Remove common prefixes
             spoken_response = re.sub(r'^(Okay,?\s*|So,?\s*|Well,?\s*|Alright,?\s*)', '', spoken_response, flags=re.IGNORECASE).strip()
+            # Remove surrounding quotes if present
+            spoken_response = re.sub(r'^["\']|["\']$', '', spoken_response).strip()
         
         if not spoken_response or len(spoken_response) < 5:
             spoken_response = full_response
             
         print(f"📝 Final thinking: {len(thinking_content) if thinking_content else 0} chars")
-        print(f"🗣️ Final spoken: {len(spoken_response)} chars")
+        print(f"🗣️ Final spoken: {len(spoken_response)} chars: {spoken_response[:80]}...")
         
         # Update conversation history with clean spoken response only
         self.conversation_history.append({"role": "user", "content": user_input})
@@ -776,7 +844,6 @@ async def serve_service_worker():
             content=sw_path.read_text(encoding="utf-8"),
             media_type="application/javascript"
         )
-    # Return empty service worker if file doesn't exist
     return Response(
         content="// Service worker placeholder\nself.addEventListener('fetch', () => {});",
         media_type="application/javascript"
