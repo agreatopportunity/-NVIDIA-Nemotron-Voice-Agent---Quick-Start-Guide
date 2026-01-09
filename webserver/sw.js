@@ -3,8 +3,8 @@
 
 const CACHE_NAME = 'nemotron-ai-v1';
 const ASSETS_TO_CACHE = [
-    '/',
-    '/index.html',
+    '/',  // The main UI (served from nemotron_web_ui.html)
+    '/sw.js',
 ];
 
 // Install event - cache assets
