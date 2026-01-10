@@ -49,8 +49,8 @@ A full-featured AI voice assistant powered by **NVIDIA Nemotron** neural models 
 ### 1. Clone/Setup Directory
 
 ```bash
-mkdir -p ~/ai/speechAi
-cd ~/ai/speechAi
+mkdir -p ~/ai
+cd ~/ai/
 ```
 
 ### 2. Install Dependencies
@@ -277,8 +277,8 @@ class ServerConfig:
     sample_rate: int = 16000
     llm_max_tokens: int = 1024
     llm_temperature: float = 0.7
-    user_city: str = "Branson"
-    user_state: str = "Missouri"
+    user_city: str = "Chicago"
+    user_state: str = "Illinois"
     user_timezone: str = "America/Chicago"
 ```
 
