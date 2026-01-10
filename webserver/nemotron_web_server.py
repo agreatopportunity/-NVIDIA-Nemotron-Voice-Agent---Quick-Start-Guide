@@ -18,8 +18,6 @@ Usage:
 
 Environment Variables (.env file):
     OPENWEATHER_API_KEY=your_key_here
-    GOOGLE_API_KEY=your_key_here
-    GOOGLE_CSE_ID=your_CSE_ID_here
 """
 
 import os
@@ -744,58 +742,32 @@ class ModelManager:
     def generate(self, user_input: str, history: Optional[List[Dict]] = None, 
                  system_prompt: str = "", use_thinking: bool = False) -> Tuple[str, Optional[str], str]:
         """
-        Generate LLM response.
-        
-        Returns:
-            Tuple[str, Optional[str], str]: (full_response, thinking_content, spoken_response)
+        Generate LLM response with 4-Pattern Robust Extraction.
         """
         
         # =====================================================
-        # DYNAMIC PROMPT SELECTION (The Fix)
+        # DYNAMIC PROMPT SELECTION
         # =====================================================
-        
-        # Check if thinking is requested via UI toggle OR global config
         should_think = use_thinking or config.use_reasoning
         
         if should_think:
             # DEEP THINKING MODE
             thinking_instruction = """You are in DEEP REASONING MODE.
-CRITICAL INSTRUCTION: Keep your internal thought process SHORT and CONCISE.
-1. Inside <think> tags: Use BULLET POINTS only. Do NOT recap the conversation. Do NOT explain your plan. Just solve the problem.
-2. After tags: Speak the answer naturally.
-
-CORRECT THINKING FORMAT:
-<think>
-- Checked search results
-- Bitcoin price is $90,500
-- Trend is volatile
-</think>
-The current price of Bitcoin is $90,500..."""
+1. You MUST first think through the problem inside <think>...</think> tags.
+2. Then provide your final spoken response.
+Format: <think>analysis</think> spoken answer."""
             full_system = f"{thinking_instruction}\n\n{system_prompt}"
         else:
-            # FAST CHAT MODE (Strict No-Thinking)
-            no_think_instruction = """CRITICAL: OUTPUT ONLY YOUR SPOKEN RESPONSE.
-
-FORBIDDEN (never output these):
-- "Okay, the user is asking..."
-- "Let me think..."  
-- "I should respond with..."
-- "First, I need to..."
-- Any internal reasoning or planning
-
-CORRECT FORMAT:
-User: "Hello, are you there?"
-You: "Yes, I'm here! How can I help you?"
-
-User: "What time is it?"
-You: "It's 5:30 PM on Friday!"
-
-Start your response with the ACTUAL ANSWER, not with thinking."""
+            # FAST CHAT MODE
+            no_think_instruction = """YOU ARE IN FAST CHAT MODE.
+- DO NOT generate internal thoughts.
+- DO NOT say "Okay, let me think" or "The user wants..."
+- Just give the answer directly and concisely."""
             full_system = f"{no_think_instruction}\n\n{system_prompt}"
         
         messages = [{"role": "system", "content": full_system}]
         
-        # Add conversation history (limit to last 4 for speed in fast mode)
+        # Add history
         history_limit = 6 if should_think else 4
         if history:
             messages.extend(history[-history_limit:])
@@ -811,16 +783,11 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
             add_generation_prompt=True
         ).to(config.device)
         
-        # Create attention mask
         attention_mask = torch.ones_like(inputs).to(config.device)
         
-        # Dynamic settings based on mode
-        if should_think:
-            max_tokens = 512
-            temperature = 0.7
-        else:
-            max_tokens = 150  # Shorter for fast, direct responses
-            temperature = 0.5  # More deterministic
+        # Settings
+        max_tokens = 512 if should_think else 200
+        temperature = config.llm_temperature
         
         # Generate
         with torch.no_grad():
@@ -829,7 +796,7 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
                 attention_mask=attention_mask,
                 max_new_tokens=max_tokens,
                 do_sample=True,
-                temperature=temperature,  # Use dynamic temperature
+                temperature=temperature,
                 top_p=0.9,
                 pad_token_id=self.llm_tokenizer.eos_token_id,
                 use_cache=True,
@@ -840,195 +807,111 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
             skip_special_tokens=True
         ).strip()
         
-        print(f"🤖 Raw LLM Response ({len(full_response)} chars, tokens={max_tokens}, temp={temperature}):\n{full_response[:500]}...")
+        print(f"🤖 Raw LLM Response ({len(full_response)} chars)...\n{full_response[:200]}...")
         
         # =====================================================
-        # EXTRACT THINKING VS SPOKEN ANSWER
+        # EXTRACT THINKING VS SPOKEN ANSWER (4-PATTERN ROBUST)
         # =====================================================
         thinking_content = None
         spoken_response = full_response
         
-        # Normalize user input for comparison (to avoid grabbing user's question as the answer)
-        user_input_lower = user_input.lower().strip()
-        
-        # BLACKLIST: Phrases from system prompt that should NEVER be the answer
-        blacklist_phrases = [
-            "conversational and concise",
-            "brief and natural",
-            "friendly and warm",
-            "direct answers",
-            "spoken aloud",
-            "markdown formatting",
-            "bullet points",
-            "response guidelines",
-            "actual answer"
-        ]
-        
-        def is_blacklisted(text: str) -> bool:
-            """Check if text contains blacklisted system prompt phrases."""
-            text_lower = text.lower()
-            return any(bp in text_lower for bp in blacklist_phrases)
-        
-        # Pattern 1: Explicit <think>...</think> tags
+        # Helper to check if text is a blacklisted phrase (from system prompt)
+        blacklist_phrases = ["conversational and concise", "brief and natural", "friendly and warm", "markdown formatting"]
+        def is_blacklisted(text): return any(bp in text.lower() for bp in blacklist_phrases)
+
+        # --- PATTERN 1: Standard <think> Tags ---
         think_match = re.search(r'<think>(.*?)</think>', full_response, flags=re.DOTALL | re.IGNORECASE)
         if think_match:
-            inside_tags = think_match.group(1).strip()
-            outside_tags = re.sub(r'<think>.*?</think>', '', full_response, flags=re.DOTALL | re.IGNORECASE).strip()
-            
-            # SMART DETECTION: The LONGER part is usually the thinking/reasoning
-            # The SHORTER part is usually the clean spoken answer
-            if len(inside_tags) > len(outside_tags):
-                # Normal: thinking inside tags, answer outside
-                thinking_content = inside_tags
-                spoken_response = outside_tags
-                print(f"✓ Normal <think> tags: thinking inside ({len(inside_tags)} chars)")
+            inside = think_match.group(1).strip()
+            outside = re.sub(r'<think>.*?</think>', '', full_response, flags=re.DOTALL | re.IGNORECASE).strip()
+            if len(inside) > len(outside):
+                thinking_content, spoken_response = inside, outside
+                print(f"✓ Pattern 1: Normal <think> tags")
             else:
-                # Reversed: answer inside tags, thinking outside
-                thinking_content = outside_tags
-                spoken_response = inside_tags
-                print(f"✓ Reversed <think> tags: answer inside ({len(inside_tags)} chars)")
-        
-        # Pattern 2: Explicit <thinking>...</thinking> tags  
+                thinking_content, spoken_response = outside, inside
+                print(f"✓ Pattern 1: Reversed <think> tags")
+
+        # --- PATTERN 2: Alternate <thinking> Tags (Safety Net) ---
         elif re.search(r'<thinking>.*?</thinking>', full_response, flags=re.DOTALL | re.IGNORECASE):
-            thinking_match = re.search(r'<thinking>(.*?)</thinking>', full_response, flags=re.DOTALL | re.IGNORECASE)
-            inside_tags = thinking_match.group(1).strip()
-            outside_tags = re.sub(r'<thinking>.*?</thinking>', '', full_response, flags=re.DOTALL | re.IGNORECASE).strip()
-            
-            # Same smart detection
-            if len(inside_tags) > len(outside_tags):
-                thinking_content = inside_tags
-                spoken_response = outside_tags
-                print(f"✓ Normal <thinking> tags")
+            match = re.search(r'<thinking>(.*?)</thinking>', full_response, flags=re.DOTALL | re.IGNORECASE)
+            inside = match.group(1).strip()
+            outside = re.sub(r'<thinking>.*?</thinking>', '', full_response, flags=re.DOTALL | re.IGNORECASE).strip()
+            if len(inside) > len(outside):
+                thinking_content, spoken_response = inside, outside
+                print(f"✓ Pattern 2: Normal <thinking> tags")
             else:
-                thinking_content = outside_tags
-                spoken_response = inside_tags
-                print(f"✓ Reversed <thinking> tags")
-        
-        # Pattern 3: No tags - model outputs plain text with reasoning
-        elif re.match(r'^(Okay|Let me|The user|I need|I should|First|So,|Alright|Hmm|Well,)', full_response, re.IGNORECASE):
-            print("⚠️ No tags, model thinking out loud...")
+                thinking_content, spoken_response = outside, inside
+                print(f"✓ Pattern 2: Reversed <thinking> tags")
+
+        # --- PATTERN 3: Implicit Reasoning Start (The "Okay, let me..." Case) ---
+        elif re.match(r'^(Okay|Let me|The user|I need|I should|First|So,|Alright)', full_response, re.IGNORECASE):
+            print("⚠️ Pattern 3: No tags, model thinking out loud...")
             
-            # Find ALL quoted strings in the response (minimum 15 chars)
-            all_quotes = re.findall(r'"([^"]{15,})"', full_response)
-            
-            # Filter out quotes that match/contain the user's input OR blacklisted phrases
-            valid_quotes = []
-            for quote in all_quotes:
-                quote_lower = quote.lower().strip()
-                
-                # Skip if quote is very similar to user input
-                if quote_lower in user_input_lower or user_input_lower in quote_lower:
-                    print(f"   Skipping quote (matches user input): {quote[:30]}...")
-                    continue
-                    
-                # Skip if quote starts with reasoning patterns
-                if re.match(r'^(okay|let me|the user|i need|i should|first|so,|wait|the response)', quote_lower):
-                    print(f"   Skipping quote (reasoning pattern): {quote[:30]}...")
-                    continue
-                    
-                # Skip if quote contains blacklisted system prompt phrases
-                if is_blacklisted(quote):
-                    print(f"   Skipping quote (blacklisted phrase): {quote[:30]}...")
-                    continue
-                    
-                valid_quotes.append(quote)
-            
-            if valid_quotes:
-                # Prefer the LAST valid quote (usually the final answer)
-                spoken_response = valid_quotes[-1]
+            # Try to find a quoted answer first (often used by 9B models)
+            quote_match = re.search(r'"([^"]{15,}[.!?])"', full_response)
+            if quote_match:
+                spoken_response = quote_match.group(1)
                 thinking_content = full_response
-                print(f"✓ Found valid quoted answer: {spoken_response[:50]}...")
+                print(f"✓ Found quoted answer in Pattern 3")
             else:
-                # No valid quotes - try to find text after SPECIFIC answer-indicating phrases
-                # (More restrictive than before to avoid false positives)
-                answer_patterns = [
-                    # Direct quote patterns
-                    r'(?:I\'ll say|my answer is|I should say|let me say)[:\s]*["\']([^"\']{20,}?)["\']',
-                    r'(?:Final answer|My response is)[:\s]*["\']([^"\']{20,}?)["\']',
-                ]
+                # Use the Multi-Sentence Splitter logic
+                sentences = re.split(r'(?<=[.!?])\s+', full_response)
+                valid_sentences = []
                 
-                found_answer = False
-                for pattern in answer_patterns:
-                    match = re.search(pattern, full_response, re.IGNORECASE)
-                    if match:
-                        candidate = match.group(1).strip()
-                        if not is_blacklisted(candidate):
-                            spoken_response = candidate
-                            thinking_content = full_response
-                            print(f"✓ Found answer after indicator phrase: {spoken_response[:50]}...")
-                            found_answer = True
-                            break
-                
-                if not found_answer:
-                    # Last resort: Find the LAST complete sentence that looks like an answer
-                    # Split on sentence boundaries
-                    sentences = re.split(r'(?<=[.!?])\s+', full_response)
+                # Scan backwards from the end
+                for sent in reversed(sentences):
+                    sent = sent.strip()
+                    if len(sent) < 2: continue
                     
-                    for sent in reversed(sentences):
-                        sent = sent.strip()
-                        sent_lower = sent.lower()
-                        
-                        # Skip short sentences
-                        if len(sent) < 20:
-                            continue
-                            
-                        # Skip reasoning sentences
-                        if re.match(r'^(okay|let me|the user|i need|i should|first|so,|also|wait|next|that|this|since|because|however)', sent_lower):
-                            continue
-                            
-                        # Skip sentences mentioning "user" or "response" or "should"
-                        if 'the user' in sent_lower or 'my response' in sent_lower or 'i should' in sent_lower:
-                            continue
-                            
-                        # Skip sentences with blacklisted phrases
-                        if is_blacklisted(sent):
-                            continue
-                            
-                        # Skip sentences that look like instructions
-                        if 'guidelines' in sent_lower or 'format' in sent_lower or 'avoid' in sent_lower:
-                            continue
-                            
-                        # This looks like a valid answer
-                        spoken_response = sent
-                        thinking_content = full_response
-                        print(f"✓ Using last valid sentence: {sent[:50]}...")
+                    # Stop if we hit reasoning keywords
+                    if re.match(r'^(okay|let me|the user|i need|i should|first|so,|next|since|because)', sent.lower()):
                         break
-        
-        # Pattern 4: Clean response first, then reasoning (Answer\n\nThinking pattern)
+                    if is_blacklisted(sent):
+                        break
+                        
+                    valid_sentences.insert(0, sent)
+                
+                if valid_sentences:
+                    spoken_response = " ".join(valid_sentences)
+                    thinking_content = full_response
+                    print(f"✓ Recovered answer via split: {spoken_response[:50]}...")
+                else:
+                    # FALLBACK: If splitter failed, keep the whole thing. 
+                    # Better to be verbose than silent.
+                    spoken_response = full_response
+                    print(f"⚠️ Pattern 3 Fallback: Keeping full response")
+
+        # --- PATTERN 4: Answer First, Reasoning Second (Newline Split) ---
         elif '\n\n' in full_response:
             parts = full_response.split('\n\n', 1)
             first_part = parts[0].strip()
             rest = parts[1].strip() if len(parts) > 1 else ""
             
-            # Check if second part looks like reasoning
+            # If the SECOND part looks like reasoning, the FIRST part is the answer
             if rest and re.match(r'^(The user|Let me|I |So |Wait|Also|First)', rest, re.IGNORECASE):
                 if not is_blacklisted(first_part):
                     spoken_response = first_part
                     thinking_content = rest
-                    print(f"✓ Answer first, then reasoning pattern")
+                    print(f"✓ Pattern 4: Answer first, reasoning second")
 
         # Final cleanup
         if spoken_response:
-            # Remove common prefixes
+            # Remove "Okay, let me" prefixes if they survived
             spoken_response = re.sub(r'^(Okay,?\s*|So,?\s*|Well,?\s*|Alright,?\s*)', '', spoken_response, flags=re.IGNORECASE).strip()
-            # Remove surrounding quotes if present
+            # Remove surrounding quotes
             spoken_response = re.sub(r'^["\']|["\']$', '', spoken_response).strip()
         
-        # Final validation - if still looks wrong, use full response
-        if not spoken_response or len(spoken_response) < 10 or is_blacklisted(spoken_response):
-            print(f"⚠️ Extraction failed, using full response")
+        # Safety: Ensure we don't return an empty string
+        if not spoken_response or len(spoken_response) < 2:
             spoken_response = full_response
-            # Clean the full response of obvious thinking markers
-            spoken_response = re.sub(r'^(Okay|Let me|The user|I need|I should|First)[^.]*\.\s*', '', spoken_response).strip()
-            
+
         print(f"📝 Final thinking: {len(thinking_content) if thinking_content else 0} chars")
-        print(f"🗣️ Final spoken: {len(spoken_response)} chars: {spoken_response[:80]}...")
+        print(f"🗣️ Final spoken: {len(spoken_response)} chars")
         
-        # Update conversation history with clean spoken response only
         self.conversation_history.append({"role": "user", "content": user_input})
         self.conversation_history.append({"role": "assistant", "content": spoken_response})
         
-        return full_response, thinking_content, spoken_response
+        return full_response, thinking_content, spoken_response    
 
     def synthesize(self, text: str, speaker_id: str = "en_0") -> bytes:
         """Synthesize speech from text."""
@@ -1441,6 +1324,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- NEW ASYNC JOB SYSTEM ---
 
 def run_transcription_background(job_id: str, file_path: str, language: str = None):
     """Background worker function."""
