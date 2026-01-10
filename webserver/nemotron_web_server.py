@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Nemotron Voice Agent - Web API Server
-===========================================
+===================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, and DateTime.
 
 Features:
 - ASR via Nemotron Speech
 - LLM via Nemotron Nano 9B with optional reasoning/thinking mode
 - TTS via Silero (speaks ONLY the response, not thinking)
-- Weather data via OpenWeather API
+- Weather data via OpenWeather API (dynamic location)
 - Date/Time awareness
 
 Usage:
@@ -18,6 +18,8 @@ Usage:
 
 Environment Variables (.env file):
     OPENWEATHER_API_KEY=your_key_here
+    GOOGLE_API_KEY=your_key_here
+    GOOGLE_CSE_ID=your_CSE_ID_here
 """
 
 import os
@@ -33,6 +35,9 @@ from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 # Load environment variables from .env file
 try:
@@ -43,12 +48,22 @@ except ImportError:
 
 # Suppress warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Disable Flash Attention for older GPUs (TITAN V / Volta)
+# Must be set BEFORE torch is imported
+os.environ["PYTORCH_ENABLE_FLASH_ATTENTION"] = "0"
+
 import warnings
 warnings.filterwarnings("ignore")
 
 import torch
+
+# Also disable at runtime for safety
+if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+    torch.backends.cuda.enable_flash_sdp(False)
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -66,12 +81,14 @@ except ImportError:
 
 @dataclass
 class ServerConfig:
-    device: str = "cuda:0"
+    device: str = "cuda:0"  # RTX 4060 Ti - Main models (ASR, LLM, TTS, Vision)
+    whisper_device: str = "cuda:1"  # TITAN V - File transcription
     asr_model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b"
     llm_model_name: str = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
+    whisper_model_size: str = "large-v3"  # Options: tiny, base, small, medium, large-v3
     sample_rate: int = 16000
-    llm_max_tokens: int = 1024  # Shorter for voice responses
-    llm_temperature: float = 0.7  # Lower = more direct, less rambling
+    llm_max_tokens: int = 1024
+    llm_temperature: float = 0.7
     use_reasoning: bool = False
     use_thinking: bool = False
     
@@ -83,7 +100,7 @@ class ServerConfig:
     # API Keys from environment
     openweather_api_key: str = field(default_factory=lambda: os.getenv("OPENWEATHER_API_KEY", ""))
     
-    # User location settings
+    # User location settings (default, will be overridden dynamically)
     user_city: str = "Branson"
     user_state: str = "Missouri"
     user_country: str = "US"
@@ -114,13 +131,113 @@ def get_current_datetime_info() -> str:
 - Week Number: {now.isocalendar()[1]}"""
 
 
-async def fetch_weather_data() -> str:
-    """Fetch current weather from OpenWeather API."""
+def extract_location_from_query(message: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Extract city, state, country from a weather query.
+    
+    Returns: (city, state, country) or (None, None, None) if not found
+    
+    Examples:
+        "What's the weather in Honolulu Hawaii?" -> ("Honolulu", "Hawaii", "US")
+        "Weather in Paris France" -> ("Paris", None, "France")
+        "What's the weather like?" -> (None, None, None)  # Use default
+    """
+    msg_lower = message.lower()
+    
+    # Common patterns for location extraction
+    patterns = [
+        # "weather in <city> <state/country>"
+        r'weather (?:in|for|at)\s+([A-Za-z\s]+?)(?:\s*,?\s*([A-Za-z\s]+?))?(?:\s*\?|$|\.)',
+        # "what's the weather in <city>"
+        r"what(?:'s| is) the (?:current )?weather (?:in|for|at)\s+([A-Za-z\s]+?)(?:\s*,?\s*([A-Za-z\s]+?))?(?:\s*\?|$|\.)",
+        # "how's the weather in <city>"
+        r"how(?:'s| is) the weather (?:in|for|at)\s+([A-Za-z\s]+?)(?:\s*,?\s*([A-Za-z\s]+?))?(?:\s*\?|$|\.)",
+        # "temperature in <city>"
+        r'(?:temperature|temp) (?:in|for|at)\s+([A-Za-z\s]+?)(?:\s*,?\s*([A-Za-z\s]+?))?(?:\s*\?|$|\.)',
+        # Direct city name after weather keywords
+        r'(?:weather|forecast|temperature)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            groups = match.groups()
+            city = groups[0].strip().title() if groups[0] else None
+            state_or_country = groups[1].strip().title() if len(groups) > 1 and groups[1] else None
+            
+            # Clean up city name - remove trailing question words
+            if city:
+                city = re.sub(r'\s*(today|tomorrow|now|right now|currently)\s*$', '', city, flags=re.IGNORECASE).strip()
+                
+            # Don't return if we only got weather keywords
+            if city and city.lower() in ['weather', 'the', 'today', 'tomorrow', 'current', 'like']:
+                continue
+                
+            if city:
+                # US States mapping
+                us_states = {
+                    'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
+                    'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE',
+                    'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI', 'idaho': 'ID',
+                    'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA', 'kansas': 'KS',
+                    'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+                    'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+                    'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
+                    'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+                    'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
+                    'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+                    'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT',
+                    'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
+                    'wisconsin': 'WI', 'wyoming': 'WY'
+                }
+                
+                # Check if state_or_country is a US state
+                if state_or_country:
+                    state_lower = state_or_country.lower()
+                    if state_lower in us_states:
+                        return (city, state_or_country, "US")
+                    else:
+                        # Assume it's a country
+                        return (city, None, state_or_country)
+                else:
+                    # No state/country specified, try to infer
+                    # Check if city itself contains state (e.g., "New York")
+                    return (city, None, None)
+    
+    return (None, None, None)
+
+
+async def fetch_weather_data(city: str = None, state: str = None, country: str = None) -> str:
+    """
+    Fetch current weather from OpenWeather API.
+    
+    Args:
+        city: City name (uses config default if None)
+        state: State/province (optional)
+        country: Country code (uses config default if None)
+    
+    Returns:
+        Formatted weather string or empty string on error
+    """
     if not config.openweather_api_key or not httpx:
         return ""
     
+    # Use defaults if not provided
+    use_city = city or config.user_city
+    use_state = state or (config.user_state if not city else None)
+    use_country = country or config.user_country
+    
     try:
-        city_query = f"{config.user_city},{config.user_state},{config.user_country}"
+        # Build query string
+        if use_state and use_country:
+            city_query = f"{use_city},{use_state},{use_country}"
+        elif use_country:
+            city_query = f"{use_city},{use_country}"
+        else:
+            city_query = use_city
+            
+        print(f"🌤️ Fetching weather for: {city_query}")
+        
         url = "https://api.openweathermap.org/data/2.5/weather"
         params = {
             "q": city_query,
@@ -129,10 +246,13 @@ async def fetch_weather_data() -> str:
         }
         
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=5.0)  # Reduced from 10s
+            response = await client.get(url, params=params, timeout=5.0)
             
             if response.status_code == 200:
                 data = response.json()
+                
+                location_name = data.get("name", use_city)
+                country_code = data.get("sys", {}).get("country", use_country)
                 
                 weather_desc = data["weather"][0]["description"].capitalize()
                 temp = data["main"]["temp"]
@@ -145,13 +265,21 @@ async def fetch_weather_data() -> str:
                 sunrise = datetime.fromtimestamp(sunrise_ts).strftime('%I:%M %p')
                 sunset = datetime.fromtimestamp(sunset_ts).strftime('%I:%M %p')
                 
-                return f"""Current Weather for {config.user_city}, {config.user_state}:
+                # Include state if it was provided and we're in the US
+                location_str = f"{location_name}, {use_state}" if use_state else location_name
+                if country_code:
+                    location_str += f", {country_code}"
+                
+                return f"""Current Weather for {location_str}:
 - Conditions: {weather_desc}
 - Temperature: {temp:.0f}°F (feels like {feels_like:.0f}°F)
 - Humidity: {humidity}%
 - Wind: {wind_speed} mph
 - Sunrise: {sunrise}
 - Sunset: {sunset}"""
+            elif response.status_code == 404:
+                print(f"⚠️ Weather API: Location not found: {city_query}")
+                return f"Weather data unavailable for {use_city}. Location not found."
             else:
                 print(f"Weather API error: {response.status_code}")
                 return ""
@@ -215,7 +343,7 @@ def build_system_prompt(weather_data: str = "", datetime_info: str = "") -> str:
     
     prompt = f"""You are Nemotron, a helpful AI voice assistant running on NVIDIA's neural speech models.
 
-User Location: {config.user_city}, {config.user_state}, {config.user_country}
+User's Home Location: {config.user_city}, {config.user_state}, {config.user_country}
 """
     
     # Only include datetime if provided
@@ -228,12 +356,12 @@ User Location: {config.user_city}, {config.user_state}, {config.user_country}
     
     prompt += """
 Response Guidelines:
-- Keep responses conversational and concise since they will be spoken aloud
-- Be friendly, warm, and natural in your speech patterns
+- Keep responses brief and natural since they will be spoken aloud
+- Be friendly and warm
 - When asked about weather, time, or date, use the information provided above
 - If you don't know something, admit it honestly
-- Avoid using markdown formatting, bullet points, or special characters in your spoken response
-- Give direct answers without explaining your thought process
+- Avoid markdown formatting, bullet points, or special characters
+- Give direct answers - start with the actual answer, not explanations of what you're going to say
 """
     
     return prompt
@@ -296,6 +424,7 @@ class ModelManager:
         self.tts_model = None
         self.vision_model = None
         self.vision_processor = None
+        self.whisper_model = None  # For file transcription on TITAN V
         self.loaded = False
         self.conversation_history: List[Dict[str, str]] = []
         
@@ -306,6 +435,9 @@ class ModelManager:
             
         print("\n" + "="*60)
         print("🚀 Loading Nemotron Models for Web Server")
+        print(f"   GPU 0 (Main): {torch.cuda.get_device_name(0)}")
+        if torch.cuda.device_count() > 1:
+            print(f"   GPU 1 (Whisper): {torch.cuda.get_device_name(1)}")
         print("="*60)
         
         start_time = time.time()
@@ -407,11 +539,46 @@ class ModelManager:
             self.vision_model = None
             self.vision_processor = None
         
+        # Load Whisper on TITAN V (cuda:1) for file transcription
+        if torch.cuda.device_count() > 1:
+            print(f"🎧 Loading Whisper {config.whisper_model_size} on {torch.cuda.get_device_name(1)}...")
+            try:
+                # TITAN V is Volta architecture - doesn't support FlashAttention
+                # Disable it before loading Whisper
+                gpu1_name = torch.cuda.get_device_name(1).lower()
+                if 'titan v' in gpu1_name or 'volta' in gpu1_name or 'v100' in gpu1_name:
+                    print("   ℹ️ Volta GPU detected - disabling FlashAttention")
+                    # Disable Flash SDP (Scaled Dot Product) attention
+                    if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+                        torch.backends.cuda.enable_flash_sdp(False)
+                    if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
+                        torch.backends.cuda.enable_mem_efficient_sdp(True)  # Use memory-efficient instead
+                
+                import whisper
+                self.whisper_model = whisper.load_model(
+                    config.whisper_model_size, 
+                    device=config.whisper_device
+                )
+                vram_titan = torch.cuda.memory_allocated(1) / 1024**3
+                print(f"   ✓ Whisper loaded on TITAN V ({vram_titan:.2f} GB VRAM)")
+            except ImportError:
+                print(f"   ⚠️ Whisper not installed. Install with: pip install openai-whisper")
+                self.whisper_model = None
+            except Exception as e:
+                print(f"   ⚠️ Whisper failed to load: {e}")
+                self.whisper_model = None
+        else:
+            print("⚠️ Only one GPU detected - Whisper transcription disabled")
+            self.whisper_model = None
+        
         total_time = time.time() - start_time
         print(f"\n✅ All models loaded in {total_time:.1f}s")
-        print(f"📊 Total VRAM: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+        print(f"📊 GPU 0 VRAM: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+        if torch.cuda.device_count() > 1:
+            print(f"📊 GPU 1 VRAM: {torch.cuda.memory_allocated(1) / 1024**3:.2f} GB")
         print(f"🧠 Thinking Mode: {'ENABLED' if config.use_reasoning else 'DISABLED'}")
         print(f"👁️ Vision Model: {'ENABLED' if self.vision_model else 'DISABLED'}")
+        print(f"🎧 Whisper: {'ENABLED (' + config.whisper_model_size + ')' if self.whisper_model else 'DISABLED'}")
         print(f"🌤️  Weather API: {'CONFIGURED' if config.openweather_api_key else 'NOT CONFIGURED'}")
         print("="*60 + "\n")
         
@@ -483,7 +650,7 @@ class ModelManager:
             return f"Could not analyze image: {str(e)}"
         
     def transcribe(self, audio_path: str) -> str:
-        """Transcribe audio file."""
+        """Transcribe audio file using Nemotron ASR (for real-time voice)."""
         with torch.no_grad():
             transcriptions = self.asr_model.transcribe([audio_path])
             
@@ -498,6 +665,81 @@ class ModelManager:
             return result.text
             
         return str(result)
+    
+    def transcribe_file(self, audio_path: str, language: str = None) -> Dict:
+        """
+        Transcribe audio/video file using Whisper on TITAN V.
+        Supports: MP3, MP4, M4A, WAV, FLAC, OGG, WEBM, etc.
+        
+        Returns dict with: transcript, language, duration, segments
+        """
+        if not self.whisper_model:
+            return {"error": "Whisper model not loaded. Need second GPU."}
+        
+        import time as timing
+        import math 
+        start_time = timing.time()
+        
+        print(f"🎧 Transcribing with Whisper: {audio_path}")
+        
+        try:
+            # Ensure Flash Attention is disabled (for Volta GPUs like TITAN V)
+            if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+                torch.backends.cuda.enable_flash_sdp(False)
+            
+            # Whisper handles audio extraction from video automatically
+            result = self.whisper_model.transcribe(
+                audio_path,
+                language=language,  # None = auto-detect
+                task="transcribe",
+                verbose=False,
+                fp16=True  # Use FP16 for faster inference
+            )
+            
+            elapsed = timing.time() - start_time
+            
+            # --- FIX: Sanitize Float Values ---
+            def safe_float(val):
+                try:
+                    f = float(val)
+                    # Check for NaN (f != f) or Infinity
+                    if math.isnan(f) or math.isinf(f):
+                        return 0.0
+                    return round(f, 2)
+                except (ValueError, TypeError):
+                    return 0.0
+            # ----------------------------------
+
+            # Extract segments with sanitized timestamps
+            segments = []
+            for seg in result.get("segments", []):
+                segments.append({
+                    "start": safe_float(seg.get("start")),
+                    "end": safe_float(seg.get("end")),
+                    "text": seg.get("text", "").strip()
+                })
+            
+            # Calculate duration safely
+            duration = 0.0
+            if segments:
+                duration = segments[-1]["end"]
+            
+            print(f"✓ Transcription complete in {elapsed:.1f}s ({len(result['text'])} chars)")
+            
+            return {
+                "transcript": result["text"].strip(),
+                "language": result.get("language", "unknown"),
+                "duration": duration,
+                "segments": segments,
+                "processing_time": round(elapsed, 2)
+            }
+            
+        except Exception as e:
+            print(f"❌ Whisper transcription error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"error": str(e)}
+    
     
     def generate(self, user_input: str, history: Optional[List[Dict]] = None, 
                  system_prompt: str = "", use_thinking: bool = False) -> Tuple[str, Optional[str], str]:
@@ -523,7 +765,7 @@ class ModelManager:
 Format: <think>analysis</think> spoken answer."""
             full_system = f"{thinking_instruction}\n\n{system_prompt}"
         else:
-            # FAST CHAT MODE (Strict No-Thinking) 
+            # FAST CHAT MODE (Strict No-Thinking)
             no_think_instruction = """CRITICAL: OUTPUT ONLY YOUR SPOKEN RESPONSE.
 
 FORBIDDEN (never output these):
@@ -534,11 +776,11 @@ FORBIDDEN (never output these):
 - Any internal reasoning or planning
 
 CORRECT FORMAT:
-User: "Hello, what time is it?"
-You: "It's 5:30 PM on Friday!"
+User: "Hello, are you there?"
+You: "Yes, I'm here! How can I help you?"
 
-User: "What's the weather?"
-You: "It's 72 degrees and sunny in Branson!"
+User: "What time is it?"
+You: "It's 5:30 PM on Friday!"
 
 Start your response with the ACTUAL ANSWER, not with thinking."""
             full_system = f"{no_think_instruction}\n\n{system_prompt}"
@@ -579,7 +821,7 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
                 attention_mask=attention_mask,
                 max_new_tokens=max_tokens,
                 do_sample=True,
-                temperature=temperature,
+                temperature=temperature,  # Use dynamic temperature
                 top_p=0.9,
                 pad_token_id=self.llm_tokenizer.eos_token_id,
                 use_cache=True,
@@ -598,8 +840,26 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
         thinking_content = None
         spoken_response = full_response
         
-        # Normalize user input for comparison
+        # Normalize user input for comparison (to avoid grabbing user's question as the answer)
         user_input_lower = user_input.lower().strip()
+        
+        # BLACKLIST: Phrases from system prompt that should NEVER be the answer
+        blacklist_phrases = [
+            "conversational and concise",
+            "brief and natural",
+            "friendly and warm",
+            "direct answers",
+            "spoken aloud",
+            "markdown formatting",
+            "bullet points",
+            "response guidelines",
+            "actual answer"
+        ]
+        
+        def is_blacklisted(text: str) -> bool:
+            """Check if text contains blacklisted system prompt phrases."""
+            text_lower = text.lower()
+            return any(bp in text_lower for bp in blacklist_phrases)
         
         # Pattern 1: Explicit <think>...</think> tags
         think_match = re.search(r'<think>(.*?)</think>', full_response, flags=re.DOTALL | re.IGNORECASE)
@@ -640,21 +900,29 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
         elif re.match(r'^(Okay|Let me|The user|I need|I should|First|So,|Alright|Hmm|Well,)', full_response, re.IGNORECASE):
             print("⚠️ No tags, model thinking out loud...")
             
-            # Find ALL quoted strings in the response
-            all_quotes = re.findall(r'"([^"]{10,})"', full_response)
+            # Find ALL quoted strings in the response (minimum 15 chars)
+            all_quotes = re.findall(r'"([^"]{15,})"', full_response)
             
-            # Filter out quotes that match/contain the user's input
+            # Filter out quotes that match/contain the user's input OR blacklisted phrases
             valid_quotes = []
             for quote in all_quotes:
                 quote_lower = quote.lower().strip()
+                
                 # Skip if quote is very similar to user input
                 if quote_lower in user_input_lower or user_input_lower in quote_lower:
                     print(f"   Skipping quote (matches user input): {quote[:30]}...")
                     continue
+                    
                 # Skip if quote starts with reasoning patterns
-                if re.match(r'^(okay|let me|the user|i need|i should|first|so,|wait)', quote_lower):
+                if re.match(r'^(okay|let me|the user|i need|i should|first|so,|wait|the response)', quote_lower):
                     print(f"   Skipping quote (reasoning pattern): {quote[:30]}...")
                     continue
+                    
+                # Skip if quote contains blacklisted system prompt phrases
+                if is_blacklisted(quote):
+                    print(f"   Skipping quote (blacklisted phrase): {quote[:30]}...")
+                    continue
+                    
                 valid_quotes.append(quote)
             
             if valid_quotes:
@@ -663,38 +931,59 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
                 thinking_content = full_response
                 print(f"✓ Found valid quoted answer: {spoken_response[:50]}...")
             else:
-                # No valid quotes - try to find text after answer-indicating phrases
+                # No valid quotes - try to find text after SPECIFIC answer-indicating phrases
+                # (More restrictive than before to avoid false positives)
                 answer_patterns = [
-                    r'(?:respond with|say something like|answer is|I\'ll say|should be)[:\s]*["\']?([^"\']{15,}[.!?])["\']?',
-                    r'(?:Final response|My response)[:\s]*["\']?([^"\']{15,}[.!?])["\']?',
+                    # Direct quote patterns
+                    r'(?:I\'ll say|my answer is|I should say|let me say)[:\s]*["\']([^"\']{20,}?)["\']',
+                    r'(?:Final answer|My response is)[:\s]*["\']([^"\']{20,}?)["\']',
                 ]
                 
                 found_answer = False
                 for pattern in answer_patterns:
                     match = re.search(pattern, full_response, re.IGNORECASE)
                     if match:
-                        spoken_response = match.group(1).strip()
-                        thinking_content = full_response
-                        print(f"✓ Found answer after indicator phrase")
-                        found_answer = True
-                        break
+                        candidate = match.group(1).strip()
+                        if not is_blacklisted(candidate):
+                            spoken_response = candidate
+                            thinking_content = full_response
+                            print(f"✓ Found answer after indicator phrase: {spoken_response[:50]}...")
+                            found_answer = True
+                            break
                 
                 if not found_answer:
-                    # Last resort: use the LAST sentence that doesn't look like reasoning
+                    # Last resort: Find the LAST complete sentence that looks like an answer
+                    # Split on sentence boundaries
                     sentences = re.split(r'(?<=[.!?])\s+', full_response)
                     
                     for sent in reversed(sentences):
-                        sent_lower = sent.lower().strip()
-                        # Skip reasoning sentences
-                        if re.match(r'^(okay|let me|the user|i need|i should|first|so,|also|wait|next|that)', sent_lower):
+                        sent = sent.strip()
+                        sent_lower = sent.lower()
+                        
+                        # Skip short sentences
+                        if len(sent) < 20:
                             continue
-                        # Skip sentences mentioning "user" or "response"
+                            
+                        # Skip reasoning sentences
+                        if re.match(r'^(okay|let me|the user|i need|i should|first|so,|also|wait|next|that|this|since|because|however)', sent_lower):
+                            continue
+                            
+                        # Skip sentences mentioning "user" or "response" or "should"
                         if 'the user' in sent_lower or 'my response' in sent_lower or 'i should' in sent_lower:
                             continue
+                            
+                        # Skip sentences with blacklisted phrases
+                        if is_blacklisted(sent):
+                            continue
+                            
+                        # Skip sentences that look like instructions
+                        if 'guidelines' in sent_lower or 'format' in sent_lower or 'avoid' in sent_lower:
+                            continue
+                            
                         # This looks like a valid answer
                         spoken_response = sent
                         thinking_content = full_response
-                        print(f"✓ Using last non-reasoning sentence: {sent[:50]}...")
+                        print(f"✓ Using last valid sentence: {sent[:50]}...")
                         break
         
         # Pattern 4: Clean response first, then reasoning (Answer\n\nThinking pattern)
@@ -705,9 +994,10 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
             
             # Check if second part looks like reasoning
             if rest and re.match(r'^(The user|Let me|I |So |Wait|Also|First)', rest, re.IGNORECASE):
-                spoken_response = first_part
-                thinking_content = rest
-                print(f"✓ Answer first, then reasoning pattern")
+                if not is_blacklisted(first_part):
+                    spoken_response = first_part
+                    thinking_content = rest
+                    print(f"✓ Answer first, then reasoning pattern")
 
         # Final cleanup
         if spoken_response:
@@ -716,8 +1006,12 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
             # Remove surrounding quotes if present
             spoken_response = re.sub(r'^["\']|["\']$', '', spoken_response).strip()
         
-        if not spoken_response or len(spoken_response) < 5:
+        # Final validation - if still looks wrong, use full response
+        if not spoken_response or len(spoken_response) < 10 or is_blacklisted(spoken_response):
+            print(f"⚠️ Extraction failed, using full response")
             spoken_response = full_response
+            # Clean the full response of obvious thinking markers
+            spoken_response = re.sub(r'^(Okay|Let me|The user|I need|I should|First)[^.]*\.\s*', '', spoken_response).strip()
             
         print(f"📝 Final thinking: {len(thinking_content) if thinking_content else 0} chars")
         print(f"🗣️ Final spoken: {len(spoken_response)} chars: {spoken_response[:80]}...")
@@ -799,6 +1093,10 @@ Start your response with the ACTUAL ANSWER, not with thinking."""
 # Global model manager
 models = ModelManager()
 
+# Store for background transcription jobs
+# Format: { "job_id": { "status": "processing", "result": None, "error": None } }
+transcription_jobs = {}
+
 # ============================================================================
 # FastAPI App
 # ============================================================================
@@ -806,7 +1104,7 @@ models = ModelManager()
 app = FastAPI(
     title="Nemotron Voice Agent API",
     description="Web API for NVIDIA Nemotron Voice Agent with Weather & DateTime",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 app.add_middleware(
@@ -816,6 +1114,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- STATIC FILES & FAVICON ---
+# 1. Mount the static directory so /static/image.png works
+static_path = Path(__file__).parent / "static"
+if static_path.exists():
+    app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+# 2. Handle the default /favicon.ico request specifically
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    if (static_path / "favicon.ico").exists():
+        return FileResponse(static_path / "favicon.ico")
+    return HTMLResponse(content="", status_code=404)
 
 # ============================================================================
 # Endpoints
@@ -852,25 +1163,35 @@ async def serve_service_worker():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {
+    health_info = {
         "status": "healthy",
         "models_loaded": models.loaded,
         "thinking_mode": config.use_reasoning,
         "weather_configured": bool(config.openweather_api_key),
         "location": f"{config.user_city}, {config.user_state}",
         "timezone": config.user_timezone,
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
-        "vram_used_gb": round(torch.cuda.memory_allocated(0) / 1024**3, 2) if torch.cuda.is_available() else 0
+        "gpu_0": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+        "gpu_0_vram_gb": round(torch.cuda.memory_allocated(0) / 1024**3, 2) if torch.cuda.is_available() else 0,
+        "vision_enabled": models.vision_model is not None,
+        "whisper_enabled": models.whisper_model is not None,
     }
+    
+    # Add second GPU info if available
+    if torch.cuda.device_count() > 1:
+        health_info["gpu_1"] = torch.cuda.get_device_name(1)
+        health_info["gpu_1_vram_gb"] = round(torch.cuda.memory_allocated(1) / 1024**3, 2)
+        health_info["whisper_model"] = config.whisper_model_size if models.whisper_model else None
+    
+    return health_info
 
 @app.get("/weather")
-async def get_weather():
-    """Get current weather data."""
-    weather = await fetch_weather_data()
+async def get_weather(city: Optional[str] = None, state: Optional[str] = None, country: Optional[str] = None):
+    """Get current weather data for a location."""
+    weather = await fetch_weather_data(city, state, country)
     return WeatherResponse(
         weather=weather if weather else "Weather data unavailable",
-        city=config.user_city,
-        state=config.user_state
+        city=city or config.user_city,
+        state=state or config.user_state
     )
 
 @app.get("/datetime")
@@ -901,10 +1222,19 @@ async def chat(request: ChatRequest):
         weather_data = ""
         datetime_info = ""
         
-        # Fetch weather only if user asks about it
+        # Fetch weather only if user asks about it - WITH DYNAMIC LOCATION
         if should_fetch_weather(request.message) and config.openweather_api_key:
-            print("🌤️ Weather query detected, fetching...")
-            weather_data = await fetch_weather_data()
+            print("🌤️ Weather query detected, extracting location...")
+            
+            # Extract location from user's query
+            city, state, country = extract_location_from_query(request.message)
+            
+            if city:
+                print(f"   📍 Extracted location: {city}, {state or 'N/A'}, {country or 'US'}")
+                weather_data = await fetch_weather_data(city, state, country)
+            else:
+                print(f"   📍 No specific location found, using default: {config.user_city}")
+                weather_data = await fetch_weather_data()
         
         # Fetch datetime only if user asks about it  
         if should_fetch_datetime(request.message):
@@ -987,25 +1317,31 @@ async def chat_with_speech(request: ChatRequest):
             image_description = models.analyze_image(request.image_data)
             print(f"⏱️ Image analysis: {timing.time() - image_start:.2f}s")
         
-        # 1. Smart Context Fetching - only fetch what's needed
+        # 1. Smart Context Fetching - WITH DYNAMIC LOCATION
         weather_data = ""
         datetime_info = ""
         
-        # Fetch weather only if user asks about it
         if should_fetch_weather(request.message) and config.openweather_api_key:
-            print("🌤️ Weather query detected, fetching...")
-            weather_data = await fetch_weather_data()
+            print("🌤️ Weather query detected, extracting location...")
+            
+            # Extract location from user's query
+            city, state, country = extract_location_from_query(request.message)
+            
+            if city:
+                print(f"   📍 Extracted location: {city}, {state or 'N/A'}, {country or 'US'}")
+                weather_data = await fetch_weather_data(city, state, country)
+            else:
+                print(f"   📍 No specific location found, using default: {config.user_city}")
+                weather_data = await fetch_weather_data()
         
-        # Fetch datetime only if user asks about it  
         if should_fetch_datetime(request.message):
             print("🕐 DateTime query detected, including...")
             datetime_info = get_current_datetime_info()
         
         # 2. Web Search Logic
         search_context = ""
-        should_search = request.web_search  # Check button first
+        should_search = request.web_search
         
-        # If button wasn't clicked, check for voice triggers
         if not should_search:
             triggers = ["search for", "google", "look up", "find info on", "search the web", "latest news", "current price", "what is the price"]
             if any(t in request.message.lower() for t in triggers):
@@ -1013,7 +1349,6 @@ async def chat_with_speech(request: ChatRequest):
 
         if should_search:
             print(f"🔎 Web search triggered for: {request.message}")
-            # Clean up the query
             clean_query = request.message
             remove_triggers = ["search for", "google", "look up", "find info on", "search the web"]
             for t in remove_triggers:
@@ -1024,7 +1359,6 @@ async def chat_with_speech(request: ChatRequest):
         # 3. Build Final System Prompt
         base_prompt = build_system_prompt(weather_data, datetime_info)
         
-        # Add image context if available
         if image_description:
             base_prompt += f"\n\n[IMAGE CONTEXT]\nThe user has shared an image. Image description: {image_description}\nUse this information to help answer their question about the image."
         
@@ -1033,10 +1367,10 @@ async def chat_with_speech(request: ChatRequest):
         else:
             final_system_prompt = base_prompt
         
-        # 4. Generate Response using FINAL prompt
+        # 4. Generate Response
         llm_start = timing.time()
-        full_response, thinking, spoken_response = models.generate(
-            request.message,
+        full_response, thinking, spoken = models.generate(
+            request.message, 
             request.history,
             final_system_prompt,
             use_thinking=request.use_thinking
@@ -1044,50 +1378,45 @@ async def chat_with_speech(request: ChatRequest):
         llm_time = timing.time() - llm_start
         print(f"⏱️ LLM generation: {llm_time:.2f}s")
         
-        # =====================================================
-        # TTS Processing
-        # =====================================================
+        # 5. Synthesize speech
+        tts_start = timing.time()
         
-        tts_text = spoken_response
+        # Clean the spoken response for TTS
+        tts_text = re.sub(r'[^\w\s,.:;?!\'\"-]', '', spoken)
+        tts_text = re.sub(r'\s+', ' ', tts_text).strip()
         
-        # Clean for TTS
-        tts_text = re.sub(r'\*\*(.*?)\*\*', r'\1', tts_text)  # Bold
-        tts_text = re.sub(r'\*(.*?)\*', r'\1', tts_text)      # Italic
-        tts_text = re.sub(r'`(.*?)`', r'\1', tts_text)        # Inline code
-        tts_text = re.sub(r'[^\w\s,.:;?!\'\"-]', '', tts_text) # Emojis
-        tts_text = re.sub(r'\s+', ' ', tts_text).strip()       # Whitespace
-        
+        # Validate TTS text
         if not tts_text or len(tts_text) < 10:
             tts_text = "I've processed your request."
         
         print(f"🔊 TTS Text ({len(tts_text)} chars): {tts_text[:100]}...")
         
-        tts_start = timing.time()
         audio_bytes = models.synthesize(tts_text, speaker_id=request.voice)
-        audio_base64 = base64.b64encode(audio_bytes).decode()
+        audio_base64 = base64.b64encode(audio_bytes).decode() if audio_bytes else None
+        
         tts_time = timing.time() - tts_start
         print(f"⏱️ TTS synthesis: {tts_time:.2f}s")
         
         total_time = timing.time() - total_start
         print(f"⏱️ TOTAL request time: {total_time:.2f}s")
         
-        # Return ONLY the spoken response for display
         return ChatResponse(
-            response=spoken_response,  # Clean spoken response only
-            thinking=thinking,          # Full thinking for the panel
+            response=spoken,
+            thinking=thinking,
             audio_base64=audio_base64,
-            image_description=image_description  # What we saw in the image
+            image_description=image_description
         )
         
     except Exception as e:
-        print(f"Chat/Speak Error: {str(e)}")
+        print(f"Chat Error: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
-    """Transcribe uploaded audio file."""
+    """Transcribe audio using Nemotron ASR."""
     if not models.loaded:
         raise HTTPException(status_code=503, detail="Models not loaded")
     
@@ -1104,6 +1433,85 @@ async def transcribe_audio(file: UploadFile = File(...)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def run_transcription_background(job_id: str, file_path: str, language: str = None):
+    """Background worker function."""
+    try:
+        print(f"🧵 Job {job_id}: Started background transcription...")
+        transcription_jobs[job_id]["status"] = "processing"
+        
+        # Run the heavy transcription
+        result = models.transcribe_file(file_path, language)
+        
+        if "error" in result:
+            transcription_jobs[job_id]["status"] = "failed"
+            transcription_jobs[job_id]["error"] = result["error"]
+        else:
+            transcription_jobs[job_id]["status"] = "completed"
+            transcription_jobs[job_id]["result"] = result
+            print(f"✅ Job {job_id}: Finished successfully.")
+            
+    except Exception as e:
+        print(f"❌ Job {job_id}: Critical Failure - {e}")
+        transcription_jobs[job_id]["status"] = "failed"
+        transcription_jobs[job_id]["error"] = str(e)
+    finally:
+        # Cleanup temp file
+        if os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+            except:
+                pass
+
+@app.post("/transcribe/file")
+async def start_transcription_job(
+    file: UploadFile = File(...),
+    language: Optional[str] = None
+):
+    """
+    Start a background transcription job.
+    """
+    if not models.loaded:
+        raise HTTPException(status_code=503, detail="Models not loaded")
+    
+    # 1. Save File
+    filename = file.filename or "audio.tmp"
+    ext = os.path.splitext(filename)[1].lower()
+    
+    try:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+            
+        # 2. Create Job
+        job_id = str(uuid.uuid4())
+        transcription_jobs[job_id] = {
+            "status": "pending",
+            "filename": filename,
+            "submitted_at": time.time()
+        }
+        
+        # 3. Launch Background Thread
+        thread = threading.Thread(
+            target=run_transcription_background, 
+            args=(job_id, tmp_path, language)
+        )
+        thread.daemon = True # Ensure thread doesn't block shutdown
+        thread.start()
+        
+        return {"job_id": job_id, "status": "started"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/transcribe/status/{job_id}")
+async def get_job_status(job_id: str):
+    """Check the status of a background job."""
+    if job_id not in transcription_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    return transcription_jobs[job_id]
 
 @app.post("/synthesize")
 async def synthesize_text(text: str, voice: str = "en_0"):
@@ -1167,12 +1575,16 @@ async def voice_websocket(websocket: WebSocket):
             
             await websocket.send_json({"status": "generating"})
             
-            # Smart context fetching
+            # Smart context fetching WITH DYNAMIC LOCATION
             weather_data = ""
             datetime_info = ""
             
             if should_fetch_weather(transcript) and config.openweather_api_key:
-                weather_data = await fetch_weather_data()
+                city, state, country = extract_location_from_query(transcript)
+                if city:
+                    weather_data = await fetch_weather_data(city, state, country)
+                else:
+                    weather_data = await fetch_weather_data()
             
             if should_fetch_datetime(transcript):
                 datetime_info = get_current_datetime_info()
@@ -1235,16 +1647,18 @@ if __name__ == "__main__":
     print(f"🧠 Thinking Mode: {'✅ ENABLED' if config.use_reasoning else '❌ DISABLED'}")
     print(f"🌤️  Weather API:   {'✅ CONFIGURED' if config.openweather_api_key else '❌ NOT SET'}")
     print(f"🔎 Google Search: {'✅ CONFIGURED' if (config.google_api_key and config.google_cse_id) else '❌ NOT SET (add GOOGLE_API_KEY and GOOGLE_CSE_ID to .env)'}")
-    print(f"📍 Location:      {config.user_city}, {config.user_state}")
+    print(f"📍 Default Location: {config.user_city}, {config.user_state}")
     print(f"🕐 Timezone:      {config.user_timezone}")
     print(f"⚡ Max Tokens:    {config.llm_max_tokens}")
+    print("="*60)
+    print("✨ v2.1")
     print("="*60)
     
     print(f"\n🌐 Starting server at http://{args.host}:{args.port}")
     print(f"📚 API Docs at http://{args.host}:{args.port}/docs\n")
     
     uvicorn.run(
-        "nemotron_web_server:app" if args.reload else app,
+        "nemotron_web_server_fixed:app" if args.reload else app,
         host=args.host,
         port=args.port,
         reload=args.reload
