@@ -51,7 +51,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Disable Flash Attention for older GPUs (TITAN V / Volta)
 # Must be set BEFORE torch is imported
-os.environ["PYTORCH_ENABLE_FLASH_ATTENTION"] = "0"
+#os.environ["PYTORCH_ENABLE_FLASH_ATTENTION"] = "0"
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -760,9 +760,17 @@ class ModelManager:
         if should_think:
             # DEEP THINKING MODE
             thinking_instruction = """You are in DEEP REASONING MODE.
-1. You MUST first think through the problem inside <think>...</think> tags.
-2. Then provide your final spoken response.
-Format: <think>analysis</think> spoken answer."""
+CRITICAL INSTRUCTION: Keep your internal thought process SHORT and CONCISE.
+1. Inside <think> tags: Use BULLET POINTS only. Do NOT recap the conversation. Do NOT explain your plan. Just solve the problem.
+2. After tags: Speak the answer naturally.
+
+CORRECT THINKING FORMAT:
+<think>
+- Checked search results
+- Bitcoin price is $90,500
+- Trend is volatile
+</think>
+The current price of Bitcoin is $90,500..."""
             full_system = f"{thinking_instruction}\n\n{system_prompt}"
         else:
             # FAST CHAT MODE (Strict No-Thinking)
