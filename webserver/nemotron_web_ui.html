@@ -1642,9 +1642,9 @@
                 
                 // Show specific error message based on error type
                 if (err.name === 'AbortError') {
-                    addMessage("⏱️ Request timed out. The AI is taking longer than expected. Please try a simpler question or try again.", false);
+                    addMessage("⏱️ Request timed out. The AI is thinking too deeply! Try turning off 'Deep Think' for faster answers.", false);
                 } else if (err.message === 'Backend error') {
-                    addMessage("⚠️ Backend error occurred. Check the server terminal for details.", false);
+                    addMessage("⚠️ Network Timeout: The AI is working, but the connection closed. \n\nTip: Try asking a simpler question or disable 'Deep Think' to speed it up.", false);
                 } else {
                     await simulatedResponse(userMessage);
                 }
