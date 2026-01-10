@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>NEMOTRON AI - Neural Voice Assistant</title>
+    
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+    <link rel="manifest" href="/static/site.webmanifest">
+    <link rel="shortcut icon" href="/static/favicon.ico">
+    
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
     <style>
         * {
@@ -765,7 +772,190 @@
     transition: transform 0.3s ease;
     font-size: 10px;
 }
+
+/* ============================================
+   Transcribe Section Styles
+   ============================================ */
+.transcribe-container {
+    padding: 20px;
+    max-width: 700px;
+    margin: 0 auto;
+}
+
+.transcribe-upload {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: rgba(0, 255, 200, 0.02);
+    margin: 20px 0;
+}
+
+.transcribe-upload:hover {
+    border-color: var(--primary);
+    background: rgba(0, 255, 200, 0.08);
+}
+
+.transcribe-upload.dragover {
+    border-color: var(--primary);
+    background: rgba(0, 255, 200, 0.15);
+    transform: scale(1.02);
+}
+
+.upload-icon {
+    font-size: 48px;
+    margin-bottom: 10px;
+}
+
+.upload-text {
+    font-size: 16px;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.upload-formats {
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.transcribe-start-btn {
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(135deg, var(--primary), #00aa88);
+    color: black;
+    font-weight: bold;
+    font-size: 16px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.transcribe-start-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0, 255, 200, 0.4);
+}
+
+.transcribe-start-btn:disabled {
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.transcribe-spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid var(--surface);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.transcribe-action-btn {
+    padding: 8px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+.transcribe-action-btn:hover {
+    background: var(--primary);
+    color: black;
+    border-color: var(--primary);
+}
+
+.meta-badge {
+    background: var(--surface);
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+}
+
+#transcribe-segments .segment-item {
+    display: flex;
+    gap: 10px;
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+
+#transcribe-segments .segment-time {
+    color: var(--primary);
+    font-family: monospace;
+    white-space: nowrap;
+}
+
+#transcribe-segments .segment-text {
+    color: var(--text);
+}
+
+/* Progress Bar Styles */
+.progress-container {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-top: 15px;
+    height: 8px;
+    position: relative;
+}
+
+.progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary), var(--accent));
+    width: 0%;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 10px var(--primary);
+    position: relative;
+    overflow: hidden;
+}
+
+/* Shimmer effect for active processing */
+.progress-bar::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    right: 0;
+    background-image: linear-gradient(
+        -45deg,
+        rgba(255, 255, 255, 0.2) 25%,
+        transparent 25%,
+        transparent 50%,
+        rgba(255, 255, 255, 0.2) 50%,
+        rgba(255, 255, 255, 0.2) 75%,
+        transparent 75%,
+        transparent
+    );
+    background-size: 50px 50px;
+    animation: move 2s linear infinite;
+    z-index: 1;
+}
+
+@keyframes move {
+    0% { background-position: 0 0; }
+    100% { background-position: 50px 50px; }
+}
     </style>
+    
+    <!-- Voice Activity Detection Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.19/dist/bundle.min.js"></script>
 </head>
 <body>
     <!-- Matrix Rain Canvas -->
@@ -789,6 +979,7 @@
             <div class="mode-toggle">
                 <button class="mode-btn active" data-mode="text" onclick="setMode('text')">⌨️ Text</button>
                 <button class="mode-btn" data-mode="voice" onclick="setMode('voice')">🎤 Voice</button>
+                <button class="mode-btn" data-mode="transcribe" onclick="setMode('transcribe')">🎧 Transcribe</button>
             </div>
 
             <div class="tts-toggle">
@@ -842,13 +1033,105 @@
             <!-- Voice Mode Toggle -->
             <div class="voice-mode-toggle" style="margin: 10px 0; display: flex; gap: 10px; justify-content: center;">
                 <button class="quick-btn" id="push-to-talk-btn" onclick="setVoiceMode('push')" style="background: var(--primary); color: black;">Push to Talk</button>
-                <button class="quick-btn" id="continuous-btn" onclick="setVoiceMode('continuous')">🎙️ Continuous</button>
+                <button class="quick-btn" id="continuous-btn" onclick="setVoiceMode('continuous')">🎙️ Conversation</button>
             </div>
             
             <button class="record-btn" id="record-btn" onclick="toggleRecording()">● Record</button>
             
             <!-- Live transcript display -->
             <div id="live-transcript" style="margin-top: 15px; padding: 10px; background: rgba(0,255,200,0.1); border-radius: 8px; min-height: 30px; font-style: italic; color: var(--primary); display: none;"></div>
+        </div>
+
+        <!-- Transcribe Container -->
+        <div class="transcribe-container" id="transcribe-container" style="display: none;">
+            <div class="transcribe-header">
+                <h3 style="color: var(--primary); margin: 0 0 10px 0;">🎧 File Transcription</h3>
+                <p style="color: var(--text-dim); font-size: 12px; margin: 0;">Powered by Whisper • Supports MP3, MP4, M4A, WAV, FLAC, MKV, AVI</p>
+            </div>
+            
+            <!-- Upload Area -->
+            <div class="transcribe-upload" id="transcribe-upload-area" onclick="document.getElementById('transcribe-file-input').click()">
+                <input type="file" id="transcribe-file-input" accept=".mp3,.mp4,.m4a,.wav,.flac,.ogg,.webm,.avi,.mkv,.mov,.aac,.wma" onchange="handleTranscribeFile(event)" style="display: none;">
+                <div class="upload-icon">📁</div>
+                <div class="upload-text">Click or drag file to upload</div>
+                <div class="upload-formats">MP3 • MP4 • M4A • WAV • FLAC • MKV • AVI • MOV</div>
+            </div>
+            
+            <!-- File Info -->
+            <div id="transcribe-file-info" style="display: none;">
+                <div style="display: flex; align-items: center; gap: 10px; padding: 15px; background: rgba(0,255,200,0.1); border-radius: 8px; margin: 15px 0;">
+                    <span style="font-size: 24px;">🎵</span>
+                    <div style="flex: 1;">
+                        <div id="transcribe-filename" style="font-weight: bold; color: var(--text);"></div>
+                        <div id="transcribe-filesize" style="font-size: 12px; color: var(--text-dim);"></div>
+                    </div>
+                    <button onclick="clearTranscribeFile()" style="background: #ff4444; color: white; border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer;">✕ Remove</button>
+                </div>
+                
+                <!-- Language Selection -->
+                <div style="margin: 15px 0;">
+                    <label style="color: var(--text-dim); font-size: 12px;">Language (optional - auto-detects if empty)</label>
+                    <select id="transcribe-language" style="width: 100%; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); margin-top: 5px;">
+                        <option value="">Auto-detect</option>
+                        <option value="en">English</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                        <option value="it">Italian</option>
+                        <option value="pt">Portuguese</option>
+                        <option value="ru">Russian</option>
+                        <option value="ja">Japanese</option>
+                        <option value="ko">Korean</option>
+                        <option value="zh">Chinese</option>
+                    </select>
+                </div>
+                
+                <button id="transcribe-btn" onclick="startTranscription()" class="transcribe-start-btn">
+                    🚀 Start Transcription
+                </button>
+            </div>
+            
+            <!-- Progress -->
+            <div id="transcribe-progress" style="display: none;">
+                <div style="text-align: center; padding: 30px;">
+                    <div class="transcribe-spinner"></div>
+                    <div style="color: var(--primary); margin-top: 15px; font-weight: bold;">Transcribing Now...</div>
+                    
+                    <div class="progress-container">
+                        <div class="progress-bar" id="real-progress-bar"></div>
+                    </div>
+                    
+                    <div id="transcribe-progress-text" style="color: var(--text-dim); font-size: 12px; margin-top: 5px;">Processing audio data...</div>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div id="transcribe-results" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h4 style="color: var(--primary); margin: 0;">📝 Transcription Result</h4>
+                    <div style="display: flex; gap: 10px;">
+                        <button onclick="copyTranscript()" class="transcribe-action-btn">📋 Copy</button>
+                        <button onclick="downloadTranscript()" class="transcribe-action-btn">💾 Download</button>
+                        <button onclick="newTranscription()" class="transcribe-action-btn">🔄 New</button>
+                    </div>
+                </div>
+                
+                <!-- Meta Info -->
+                <div id="transcribe-meta" style="display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap;">
+                    <span class="meta-badge" id="meta-language">🌐 English</span>
+                    <span class="meta-badge" id="meta-duration">⏱️ 0:00</span>
+                    <span class="meta-badge" id="meta-time">⚡ 0.0s</span>
+                </div>
+                
+                <!-- Transcript Text -->
+                <div id="transcribe-text" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 15px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; line-height: 1.6;"></div>
+                
+                <!-- Segments Toggle -->
+                <details style="margin-top: 15px;">
+                    <summary style="cursor: pointer; color: var(--primary); font-weight: bold;">📊 Show Timestamps</summary>
+                    <div id="transcribe-segments" style="margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
+                </details>
+            </div>
         </div>
 
         <!-- Text Input -->
@@ -885,6 +1168,7 @@
 
             <div class="quick-actions">
                 <button class="quick-btn" onclick="setMode('voice')">🎤 Voice</button>
+                <button class="quick-btn" onclick="setMode('transcribe')">🎧 Transcribe</button>
                 <button class="quick-btn" onclick="document.getElementById('file-input').click()">📷 Upload</button>
                 <button class="quick-btn" onclick="manualWebSearch()">🌐 Search Web</button>
                 <button class="quick-btn" onclick="clearChat()">🗑️ Clear</button>
@@ -893,7 +1177,7 @@
 
         <!-- Footer -->
         <footer class="footer">
-            <p>POWERED BY NVIDIA NEMOTRON • ASR + LLM + TTS + VISION</p>
+            <p>POWERED BY NVIDIA NEMOTRON • ASR + LLM + TTS + VISION + WHISPER + VAD</p>
         </footer>
     </div>
 
@@ -981,12 +1265,9 @@
         let isThinkingEnabled = false;
         let deepThinkEnabled = false;
         
-        // Voice mode: 'push' (push-to-talk) or 'continuous' (auto-submit on silence)
+        // Voice mode: 'push' (push-to-talk) or 'continuous' (VAD-based auto-detect)
         let voiceMode = 'push';
-        let speechRecognition = null;
-        let silenceTimeout = null;
-        let currentTranscript = '';
-        const SILENCE_DELAY = 1500; // Auto-submit after 1.5s of silence
+        // VAD instance is managed in the VAD section below
         
         // Image handling
         let currentImageData = null; // Base64 image data for vision
@@ -1150,6 +1431,7 @@
 
             document.getElementById('voice-container').style.display = mode === 'voice' ? 'block' : 'none';
             document.getElementById('input-container').style.display = mode === 'text' ? 'block' : 'none';
+            document.getElementById('transcribe-container').style.display = mode === 'transcribe' ? 'block' : 'none';
         }
 
         // ============================================
@@ -1622,143 +1904,222 @@
         }
 
         // ============================================
-        // Continuous Voice Mode (Web Speech API)
         // ============================================
-        function initSpeechRecognition() {
-            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-                alert('Speech recognition not supported in this browser. Use Chrome for best results.');
-                return null;
-            }
-            
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            const recognition = new SpeechRecognition();
-            
-            recognition.continuous = true;
-            recognition.interimResults = true;
-            recognition.lang = 'en-US';
-            
-            recognition.onstart = () => {
-                console.log('Speech recognition started');
+        // VAD (Voice Activity Detection) - "Jarvis Mode"
+        // Runs 100% locally in browser, no cloud needed!
+        // Automatically detects speech start/end
+        // ============================================
+        // ============================================
+        let vadInstance = null;
+        let vadAudioContext = null;
+        
+        async function startContinuousListening() {
+            // If VAD already exists, just resume it
+            if (vadInstance) {
+                vadInstance.start();
                 isRecording = true;
                 updateVoiceUI();
-            };
+                document.getElementById('live-transcript').style.display = 'block';
+                document.getElementById('live-transcript').textContent = '🎤 Listening... (speak naturally)';
+                return;
+            }
             
-            recognition.onresult = (event) => {
-                let interimTranscript = '';
-                let finalTranscript = '';
+            try {
+                document.getElementById('live-transcript').style.display = 'block';
+                document.getElementById('live-transcript').textContent = '⏳ Initializing voice detection...';
                 
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
-                    if (event.results[i].isFinal) {
-                        finalTranscript += transcript;
-                    } else {
-                        interimTranscript += transcript;
+                // Create VAD instance with local processing
+                vadInstance = await vad.MicVAD.new({
+                    positiveSpeechThreshold: 0.8,  // Confidence threshold
+                    negativeSpeechThreshold: 0.5,
+                    minSpeechFrames: 5,            // Min frames to count as speech
+                    redemptionFrames: 8,           // Frames of silence before speech end
+                    
+                    onSpeechStart: () => {
+                        console.log("🗣️ Speech started");
+                        document.getElementById('live-transcript').textContent = '🗣️ Listening...';
+                        document.getElementById('orb-core').classList.add('recording');
+                        document.getElementById('orb-status').textContent = '● LISTENING';
+                        document.getElementById('orb-status').className = 'orb-status recording';
+                    },
+                    
+                    onSpeechEnd: async (audio) => {
+                        console.log("🤫 Speech ended, processing...");
+                        document.getElementById('orb-core').classList.remove('recording');
+                        document.getElementById('live-transcript').textContent = '⚡ Processing...';
+                        document.getElementById('orb-status').textContent = '◐ PROCESSING';
+                        document.getElementById('orb-status').className = 'orb-status processing';
+                        
+                        // Process the captured audio
+                        await processVadAudio(audio);
+                    },
+                    
+                    onVADMisfire: () => {
+                        console.log("⚠️ Background noise ignored");
+                        document.getElementById('orb-core').classList.remove('recording');
                     }
-                }
+                });
                 
-                // Update live display
-                const liveEl = document.getElementById('live-transcript');
-                if (finalTranscript) {
-                    currentTranscript += finalTranscript + ' ';
-                    liveEl.textContent = currentTranscript;
-                } else {
-                    liveEl.textContent = currentTranscript + interimTranscript;
-                }
+                // Start listening
+                vadInstance.start();
+                isRecording = true;
+                updateVoiceUI();
                 
-                // Reset silence timer
-                if (silenceTimeout) clearTimeout(silenceTimeout);
+                document.getElementById('live-transcript').textContent = '🎤 Listening... (speak naturally)';
+                document.getElementById('orb-status').textContent = '◉ READY';
+                document.getElementById('orb-status').className = 'orb-status ready';
                 
-                // Auto-submit after silence
-                if (currentTranscript.trim()) {
-                    silenceTimeout = setTimeout(() => {
-                        if (currentTranscript.trim() && !isProcessing) {
-                            submitContinuousTranscript();
-                        }
-                    }, SILENCE_DELAY);
-                }
-            };
-            
-            recognition.onerror = (event) => {
-                console.error('Speech recognition error:', event.error);
-                if (event.error !== 'no-speech') {
-                    const liveEl = document.getElementById('live-transcript');
-                    liveEl.textContent = `Error: ${event.error}`;
-                }
-            };
-            
-            recognition.onend = () => {
-                console.log('Speech recognition ended');
-                // Restart if still in continuous mode and recording
-                if (voiceMode === 'continuous' && isRecording && !isProcessing) {
-                    setTimeout(() => recognition.start(), 100);
-                }
-            };
-            
-            return recognition;
-        }
-        
-        async function submitContinuousTranscript() {
-            if (!currentTranscript.trim() || isProcessing) return;
-            
-            const transcript = currentTranscript.trim();
-            currentTranscript = '';
-            
-            // Stop recognition temporarily
-            if (speechRecognition) {
-                speechRecognition.stop();
-            }
-            isRecording = false;
-            
-            // Clear live display
-            document.getElementById('live-transcript').textContent = '';
-            
-            // Add user message and get response
-            addMessage(`🎤 "${transcript}"`, true);
-            await getResponse(transcript);
-            
-            // Resume listening after response (if TTS is done)
-            if (voiceMode === 'continuous' && !isSpeaking) {
-                setTimeout(() => {
-                    if (voiceMode === 'continuous') {
-                        startContinuousListening();
-                    }
-                }, 500);
-            }
-        }
-        
-        function startContinuousListening() {
-            if (!speechRecognition) {
-                speechRecognition = initSpeechRecognition();
-            }
-            if (speechRecognition) {
-                currentTranscript = '';
-                document.getElementById('live-transcript').textContent = 'Listening...';
-                speechRecognition.start();
+                addMessage("🎙️ **Conversation Mode Active**\n\nJust speak naturally - I'll detect when you're done and respond automatically!", false);
+                
+            } catch (e) {
+                console.error("VAD initialization error:", e);
+                document.getElementById('live-transcript').textContent = '❌ Voice detection failed';
+                
+                // Fallback message
+                alert(`Voice Activity Detection failed to initialize.\n\nError: ${e.message}\n\nTry using Push-to-Talk mode instead, or check microphone permissions.`);
+                
+                // Reset state
+                isRecording = false;
+                updateVoiceUI();
             }
         }
         
         function stopContinuousListening() {
-            if (speechRecognition) {
-                speechRecognition.stop();
+            if (vadInstance) {
+                vadInstance.pause();
             }
-            if (silenceTimeout) clearTimeout(silenceTimeout);
             isRecording = false;
-            currentTranscript = '';
+            document.getElementById('live-transcript').style.display = 'none';
             document.getElementById('live-transcript').textContent = '';
+            document.getElementById('orb-status').textContent = '◉ READY';
+            document.getElementById('orb-status').className = 'orb-status ready';
+            document.getElementById('orb-core').classList.remove('recording');
             updateVoiceUI();
         }
         
+        async function processVadAudio(audioFloat32) {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            try {
+                // Convert Float32Array to WAV blob
+                const wavBuffer = encodeWAV(audioFloat32);
+                const audioBlob = new Blob([wavBuffer], { type: 'audio/wav' });
+                
+                console.log(`📤 Sending ${(audioBlob.size / 1024).toFixed(1)}KB audio to Nemotron ASR`);
+                
+                // Send to server for transcription
+                const formData = new FormData();
+                formData.append('file', audioBlob, 'vad_audio.wav');
+                
+                const response = await fetch(`${API_BASE}/transcribe`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Transcription failed: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                let transcript = data.transcript;
+                
+                // Handle array response
+                if (Array.isArray(transcript)) {
+                    transcript = transcript[0];
+                }
+                
+                // Clean up transcript
+                transcript = (transcript || '').trim();
+                
+                if (transcript.length > 0) {
+                    console.log(`📝 Transcript: "${transcript}"`);
+                    
+                    // Show user message
+                    addMessage(`🎤 "${transcript}"`, true);
+                    
+                    // Update status
+                    document.getElementById('live-transcript').textContent = '🤖 Thinking...';
+                    document.getElementById('orb-status').textContent = '◐ THINKING';
+                    
+                    // Get AI response
+                    await getResponse(transcript);
+                    
+                    // Resume listening after response completes
+                    if (voiceMode === 'continuous' && isRecording) {
+                        document.getElementById('live-transcript').textContent = '🎤 Listening...';
+                        document.getElementById('orb-status').textContent = '◉ READY';
+                        document.getElementById('orb-status').className = 'orb-status ready';
+                    }
+                } else {
+                    console.log("⚠️ Empty transcript - ignoring");
+                    document.getElementById('live-transcript').textContent = '🎤 Listening...';
+                    document.getElementById('orb-status').textContent = '◉ READY';
+                    document.getElementById('orb-status').className = 'orb-status ready';
+                }
+                
+            } catch (e) {
+                console.error("VAD audio processing error:", e);
+                document.getElementById('live-transcript').textContent = '❌ Error - retrying...';
+                
+                // Resume listening after error
+                setTimeout(() => {
+                    if (voiceMode === 'continuous' && isRecording) {
+                        document.getElementById('live-transcript').textContent = '🎤 Listening...';
+                    }
+                }, 1000);
+            }
+            
+            isProcessing = false;
+        }
+        
+        // WAV Encoder for VAD audio (Float32 → WAV)
+        function encodeWAV(samples, sampleRate = 16000) {
+            const buffer = new ArrayBuffer(44 + samples.length * 2);
+            const view = new DataView(buffer);
+            
+            // WAV header
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + samples.length * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);           // Subchunk1Size
+            view.setUint16(20, 1, true);            // AudioFormat (PCM)
+            view.setUint16(22, 1, true);            // NumChannels (Mono)
+            view.setUint32(24, sampleRate, true);   // SampleRate
+            view.setUint32(28, sampleRate * 2, true); // ByteRate
+            view.setUint16(32, 2, true);            // BlockAlign
+            view.setUint16(34, 16, true);           // BitsPerSample
+            writeString(view, 36, 'data');
+            view.setUint32(40, samples.length * 2, true);
+            
+            // Convert Float32 to Int16
+            let offset = 44;
+            for (let i = 0; i < samples.length; i++) {
+                const s = Math.max(-1, Math.min(1, samples[i]));
+                view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+                offset += 2;
+            }
+            
+            return buffer;
+        }
+        
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+        
         // Override toggleRecording for voice mode support
-        const originalToggleRecording = toggleRecording;
         async function toggleRecording() {
             if (isProcessing || isSpeaking) return;
             
             if (voiceMode === 'continuous') {
-                // Continuous mode
+                // VAD-based continuous mode
                 if (isRecording) {
                     stopContinuousListening();
                 } else {
-                    startContinuousListening();
+                    await startContinuousListening();
                 }
             } else {
                 // Push-to-talk mode (original behavior)
@@ -1905,6 +2266,290 @@ window.addEventListener('DOMContentLoaded', initVoiceList);
             // Force the search flag to true
             await getResponse(text, [], true); 
         }
+
+        // ============================================
+        // File Transcription
+        // ============================================
+        let transcribeFile = null;
+        let transcriptData = null;
+
+        function handleTranscribeFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            transcribeFile = file;
+            
+            // Show file info
+            document.getElementById('transcribe-upload-area').style.display = 'none';
+            document.getElementById('transcribe-file-info').style.display = 'block';
+            document.getElementById('transcribe-filename').textContent = file.name;
+            document.getElementById('transcribe-filesize').textContent = formatFileSize(file.size);
+            
+            // Reset results
+            document.getElementById('transcribe-results').style.display = 'none';
+            document.getElementById('transcribe-progress').style.display = 'none';
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function clearTranscribeFile() {
+            transcribeFile = null;
+            document.getElementById('transcribe-file-input').value = '';
+            document.getElementById('transcribe-upload-area').style.display = 'block';
+            document.getElementById('transcribe-file-info').style.display = 'none';
+            document.getElementById('transcribe-results').style.display = 'none';
+            document.getElementById('transcribe-progress').style.display = 'none';
+        }
+
+        async function startTranscription() {
+            if (!transcribeFile) {
+                alert('Please select a file first');
+                return;
+            }
+
+            // UI Setup
+            document.getElementById('transcribe-file-info').style.display = 'none';
+            document.getElementById('transcribe-progress').style.display = 'block';
+            document.getElementById('transcribe-results').style.display = 'none';
+            
+            // Progress Bar Setup
+            const pBar = document.getElementById('real-progress-bar');
+            const pText = document.getElementById('transcribe-progress-text');
+            pBar.style.width = '0%';
+            pBar.style.backgroundColor = ''; 
+            pText.textContent = 'Uploading...';
+
+            try {
+                // 1. UPLOAD FILE & START JOB
+                const formData = new FormData();
+                formData.append('file', transcribeFile);
+                
+                const language = document.getElementById('transcribe-language').value;
+                const uploadUrl = language 
+                    ? `${API_BASE}/transcribe/file?language=${language}`
+                    : `${API_BASE}/transcribe/file`;
+
+                const uploadResponse = await fetch(uploadUrl, { method: 'POST', body: formData });
+
+                if (!uploadResponse.ok) throw new Error("Upload failed. Check connection.");
+                
+                const uploadData = await uploadResponse.json();
+                const jobId = uploadData.job_id;
+                console.log(`Job Started: ${jobId}`);
+
+                // 2. POLL FOR STATUS
+                let pollInterval;
+                let startTime = Date.now();
+                
+                pText.textContent = 'Processing on server... (You can close this tab, it will continue)';
+                
+                // Start a fake progress bar that moves slowly to 95%
+                let fakeProgress = 5;
+                const progressTimer = setInterval(() => {
+                    if (fakeProgress < 95) {
+                        fakeProgress += (95 - fakeProgress) / 50; // Slow down as it gets higher
+                        pBar.style.width = `${fakeProgress}%`;
+                    }
+                }, 500);
+
+                // Polling Loop
+                const checkStatus = async () => {
+                    try {
+                        const statusResp = await fetch(`${API_BASE}/transcribe/status/${jobId}`);
+                        if (!statusResp.ok) return; // Network blip, retry next time
+                        
+                        const statusData = await statusResp.json();
+                        
+                        if (statusData.status === 'completed') {
+                            // DONE!
+                            clearInterval(pollInterval);
+                            clearInterval(progressTimer);
+                            
+                            pBar.style.width = '100%';
+                            pText.textContent = 'Complete!';
+                            transcriptData = statusData.result; // Store the result
+                            
+                            setTimeout(() => displayTranscriptResults(transcriptData), 500);
+                            
+                        } else if (statusData.status === 'failed') {
+                            // FAILED
+                            throw new Error(statusData.error || "Server processing failed");
+                        } else {
+                            // STILL PROCESSING
+                            // Optional: Update text with elapsed time
+                            const elapsed = Math.round((Date.now() - startTime) / 1000);
+                            pText.textContent = `Processing on Titan V... (${elapsed}s)`;
+                        }
+                    } catch (e) {
+                        clearInterval(pollInterval);
+                        clearInterval(progressTimer);
+                        handleError(e);
+                    }
+                };
+
+                // Check every 2 seconds
+                pollInterval = setInterval(checkStatus, 2000);
+
+            } catch (error) {
+                handleError(error);
+            }
+            
+            function handleError(error) {
+                console.error('Transcription error:', error);
+                const pBar = document.getElementById('real-progress-bar');
+                const pText = document.getElementById('transcribe-progress-text');
+                
+                pBar.style.width = '100%';
+                pBar.style.backgroundColor = '#ff4444';
+                pText.textContent = `Error: ${error.message}`;
+                pText.style.color = '#ff4444';
+                
+                alert(`Transcription failed: ${error.message}`);
+                
+                setTimeout(() => {
+                    document.getElementById('transcribe-progress').style.display = 'none';
+                    document.getElementById('transcribe-file-info').style.display = 'block';
+                    pText.style.color = '';
+                }, 4000);
+            }
+        }
+
+        function displayTranscriptResults(data) {
+            document.getElementById('transcribe-progress').style.display = 'none';
+            document.getElementById('transcribe-results').style.display = 'block';
+            
+            // Meta info
+            const langNames = {
+                'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
+                'it': 'Italian', 'pt': 'Portuguese', 'ru': 'Russian', 'ja': 'Japanese',
+                'ko': 'Korean', 'zh': 'Chinese'
+            };
+            document.getElementById('meta-language').textContent = `🌐 ${langNames[data.language] || data.language}`;
+            document.getElementById('meta-duration').textContent = `⏱️ ${formatDuration(data.duration)}`;
+            document.getElementById('meta-time').textContent = `⚡ ${data.processing_time}s`;
+            
+            // Transcript text
+            document.getElementById('transcribe-text').textContent = data.transcript;
+            
+            // Segments with timestamps
+            const segmentsDiv = document.getElementById('transcribe-segments');
+            if (data.segments && data.segments.length > 0) {
+                segmentsDiv.innerHTML = data.segments.map(seg => `
+                    <div class="segment-item">
+                        <span class="segment-time">[${formatTime(seg.start)} → ${formatTime(seg.end)}]</span>
+                        <span class="segment-text">${seg.text}</span>
+                    </div>
+                `).join('');
+            } else {
+                segmentsDiv.innerHTML = '<p style="color: var(--text-dim);">No timestamp segments available</p>';
+            }
+        }
+
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = (seconds % 60).toFixed(1);
+            return `${mins}:${secs.padStart(4, '0')}`;
+        }
+
+        function copyTranscript() {
+            if (!transcriptData) return;
+            
+            navigator.clipboard.writeText(transcriptData.transcript).then(() => {
+                // Brief visual feedback
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                btn.style.background = 'var(--primary)';
+                btn.style.color = 'black';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.background = '';
+                    btn.style.color = '';
+                }, 2000);
+            });
+        }
+
+        function downloadTranscript() {
+            if (!transcriptData) return;
+            
+            // Create text file with transcript and metadata
+            let content = `# Transcription\n`;
+            content += `File: ${transcribeFile?.name || 'Unknown'}\n`;
+            content += `Language: ${transcriptData.language}\n`;
+            content += `Duration: ${formatDuration(transcriptData.duration)}\n`;
+            content += `Processing Time: ${transcriptData.processing_time}s\n`;
+            content += `\n---\n\n`;
+            content += transcriptData.transcript;
+            
+            if (transcriptData.segments && transcriptData.segments.length > 0) {
+                content += `\n\n---\n\n# Timestamps\n\n`;
+                transcriptData.segments.forEach(seg => {
+                    content += `[${formatTime(seg.start)} → ${formatTime(seg.end)}] ${seg.text}\n`;
+                });
+            }
+            
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `transcript_${transcribeFile?.name?.replace(/\.[^.]+$/, '') || 'output'}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function newTranscription() {
+            clearTranscribeFile();
+            transcriptData = null;
+        }
+
+        // Drag and drop support for transcribe upload
+        document.addEventListener('DOMContentLoaded', () => {
+            const uploadArea = document.getElementById('transcribe-upload-area');
+            if (uploadArea) {
+                uploadArea.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    uploadArea.classList.add('dragover');
+                });
+                
+                uploadArea.addEventListener('dragleave', () => {
+                    uploadArea.classList.remove('dragover');
+                });
+                
+                uploadArea.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    uploadArea.classList.remove('dragover');
+                    
+                    const file = e.dataTransfer.files[0];
+                    if (file) {
+                        // Validate file type
+                        const validTypes = ['.mp3', '.mp4', '.m4a', '.wav', '.flac', '.ogg', '.webm', '.avi', '.mkv', '.mov', '.aac', '.wma'];
+                        const ext = '.' + file.name.split('.').pop().toLowerCase();
+                        
+                        if (validTypes.includes(ext)) {
+                            transcribeFile = file;
+                            document.getElementById('transcribe-upload-area').style.display = 'none';
+                            document.getElementById('transcribe-file-info').style.display = 'block';
+                            document.getElementById('transcribe-filename').textContent = file.name;
+                            document.getElementById('transcribe-filesize').textContent = formatFileSize(file.size);
+                        } else {
+                            alert(`Unsupported file type: ${ext}\n\nSupported: ${validTypes.join(', ')}`);
+                        }
+                    }
+                });
+            }
+        });
 
     </script>
 </body>
