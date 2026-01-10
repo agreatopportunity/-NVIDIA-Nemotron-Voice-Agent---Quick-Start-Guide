@@ -101,8 +101,8 @@ class ServerConfig:
     openweather_api_key: str = field(default_factory=lambda: os.getenv("OPENWEATHER_API_KEY", ""))
     
     # User location settings (default, will be overridden dynamically)
-    user_city: str = "Branson"
-    user_state: str = "Missouri"
+    user_city: str = "Chicago"
+    user_state: str = "Illinois"
     user_country: str = "US"
     user_timezone: str = "America/Chicago"
 
