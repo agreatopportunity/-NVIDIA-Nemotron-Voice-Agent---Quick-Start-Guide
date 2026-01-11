@@ -4,10 +4,10 @@ Nemotron Voice Agent - OPTIMIZED Web API Server v3.1
 =====================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
 
-HARDWARE OPTIMIZED FOR:
+HARDWARE OPTIMIZED FOR and Tested on:
 - GPU 0 (cuda:0): RTX 4060 Ti 16GB - Main models (ASR, LLM, TTS, Vision)
 - GPU 1 (cuda:1): TITAN V 12GB - Whisper file transcription
-- Driver: 550.x (DO NOT UPGRADE - optimal for Volta + Ada mixed setup)
+- Driver: 550.x (DO NOT UPGRADE - optimal for Volta(TitanV) + Ada(4060ti) mixed setup)
 - CUDA: 12.4
 
 Usage:
@@ -77,7 +77,6 @@ except ImportError:
 # ============================================================================
 # PRE-COMPILED REGEX PATTERNS
 # ============================================================================
-
 THINK_PATTERN = re.compile(r'<think>(.*?)</think>', re.DOTALL | re.IGNORECASE)
 THINKING_PATTERN = re.compile(r'<thinking>(.*?)</thinking>', re.DOTALL | re.IGNORECASE)
 REASONING_START_PATTERN = re.compile(
@@ -102,6 +101,216 @@ CLEANUP_PREFIX_PATTERN = re.compile(
 CLEANUP_QUOTES_PATTERN = re.compile(r'^["\']|["\']$')
 TTS_CLEANUP_PATTERN = re.compile(r'[^\w\s,.:;?!\'\"-]')
 WHITESPACE_PATTERN = re.compile(r'\s+')
+
+THINK_TAG_OPEN  = re.compile(r"<\s*think\s*>", re.IGNORECASE)
+THINK_TAG_CLOSE = re.compile(r"<\s*/\s*think\s*>", re.IGNORECASE)
+LEADING_THINK_WORDS = re.compile(r"^(?:\s*think[\s:,-]*)+", re.IGNORECASE)
+
+def clean_spoken_text(s: str) -> str:
+    if not s:
+        return ""
+    # remove any residual think tags
+    s = THINK_TAG_OPEN.sub("", s)
+    s = THINK_TAG_CLOSE.sub("", s)
+
+    # remove leading "think" / "think think" artifacts
+    s = LEADING_THINK_WORDS.sub("", s)
+
+    # remove common meta phrases that sometimes leak
+    s = re.sub(
+        r"^\s*(alright|okay|so|well)\s*,?\s*(i(?:’|'|)ll go with that\.?)\s*",
+        "",
+        s,
+        flags=re.I,
+    )
+    return s.strip()
+
+def split_thinking_and_spoken(full_response: str) -> tuple[str | None, str]:
+    """
+    Returns: (thinking_content_or_None, spoken_response)
+
+    Hard rule:
+      - If </think> exists anywhere, spoken is ONLY the text after the LAST </think>.
+        This fixes 'trailing </think>' leaks (no matching <think>).
+    Fallbacks:
+      - <think>...</think>
+      - <thinking>...</thinking>
+      - Pattern 3 (thinking out loud) heuristics
+      - newline-based split (Pattern 4)
+    """
+    if not full_response:
+        return None, ""
+
+    full_response = full_response.strip()
+
+    # ---------------------------------------------------------------------
+    # PATTERN 0 (HARD RULE): if a closing </think> exists, use LAST split
+    # ---------------------------------------------------------------------
+    if THINK_TAG_CLOSE.search(full_response):
+        parts = THINK_TAG_CLOSE.split(full_response)
+        before_last_close = "".join(parts[:-1]).strip()
+        after_last_close = parts[-1].strip()
+
+        thinking = THINK_TAG_OPEN.sub("", before_last_close).strip()
+        spoken = clean_spoken_text(after_last_close)
+
+        # If the model mistakenly starts another <think> after </think>, strip it
+        spoken = THINK_TAG_OPEN.sub("", spoken).strip()
+
+        # If spoken ended up empty, try to salvage a "least-meta" line from thinking
+        if not spoken and thinking:
+            paras = [p.strip() for p in thinking.split("\n\n") if p.strip()]
+            for p in reversed(paras):
+                if not re.search(r"(the user just|guidelines say|i should|i will|let me|alright,\s*i)", p, re.I):
+                    spoken = clean_spoken_text(p)
+                    break
+
+        return (thinking if thinking else None), (spoken if spoken else "")
+
+    # ---------------------------------------------------------------------
+    # PATTERN 1: <think>...</think>
+    # ---------------------------------------------------------------------
+    think_match = THINK_PATTERN.search(full_response)
+    if think_match:
+        inside = (think_match.group(1) or "").strip()
+        outside = THINK_PATTERN.sub("", full_response).strip()
+
+        if len(inside) > len(outside):
+            thinking_content, spoken_response = inside, outside
+        else:
+            thinking_content, spoken_response = outside, inside
+
+        return (thinking_content if thinking_content else None), clean_spoken_text(spoken_response)
+
+    # ---------------------------------------------------------------------
+    # PATTERN 2: <thinking>...</thinking>
+    # ---------------------------------------------------------------------
+    if THINKING_PATTERN.search(full_response):
+        match = THINKING_PATTERN.search(full_response)
+        inside = (match.group(1) or "").strip()
+        outside = THINKING_PATTERN.sub("", full_response).strip()
+
+        if len(inside) > len(outside):
+            thinking_content, spoken_response = inside, outside
+        else:
+            thinking_content, spoken_response = outside, inside
+
+        return (thinking_content if thinking_content else None), clean_spoken_text(spoken_response)
+
+    # ---------------------------------------------------------------------
+    # PATTERN 3: "thinking out loud" heuristics - ENHANCED
+    # ---------------------------------------------------------------------
+    # List of phrases that indicate meta/thinking content
+    THINKING_INDICATORS = [
+        r"^the user",
+        r"^i need to",
+        r"^i should",
+        r"^let me",
+        r"^okay,?\s*(let|so|i)",
+        r"^alright,?\s*(let|so|i)",
+        r"^looking at",
+        r"^checking",
+        r"^wait,",
+        r"^hmm,?",
+        r"^so,?\s*(the|i|let)",
+        r"the guidelines",
+        r"i('ll| will) (state|give|provide|say)",
+        r"the (first|second|third) (one|result|source)",
+        r"(coinmarketcap|binance|coindesk|the search|web search)",
+        r"since the",
+        r"however,",
+        r"the dates? (are|is)",
+        r"might be more recent",
+    ]
+    
+    thinking_pattern = re.compile("|".join(THINKING_INDICATORS), re.IGNORECASE)
+    
+    if REASONING_START_PATTERN.match(full_response):
+        # Strategy A: Phantom Think separator (". think " or similar)
+        phantom_split = PHANTOM_THINK_PATTERN.split(full_response)
+        if len(phantom_split) > 1:
+            spoken_response = phantom_split[-1].strip()
+            thinking_content = phantom_split[0].strip()
+            # Verify the spoken part isn't also thinking
+            if not thinking_pattern.search(spoken_response.lower()[:50]):
+                return (thinking_content if thinking_content else None), clean_spoken_text(spoken_response)
+
+        # Strategy B: Quoted answer
+        if QUOTE_PATTERN.search(full_response):
+            quote_match = QUOTE_PATTERN.search(full_response)
+            spoken_response = quote_match.group(1)
+            quote_start_index = quote_match.start()
+            thinking_content = full_response[:quote_start_index].strip()
+            return (thinking_content if thinking_content else None), clean_spoken_text(spoken_response)
+
+        # Strategy C: Find the LAST sentence that looks like an answer (not thinking)
+        sentences = SENTENCE_SPLIT_PATTERN.split(full_response)
+        
+        # Scan from the end to find a non-thinking sentence
+        answer_sentences = []
+        for sent in reversed(sentences):
+            sent = sent.strip()
+            if len(sent) < 5:
+                continue
+            
+            sent_lower = sent.lower()
+            
+            # Check if this sentence looks like thinking/meta content
+            is_thinking = (
+                thinking_pattern.search(sent_lower) or
+                REASONING_SENTENCE_PATTERN.match(sent) or
+                is_blacklisted(sent)
+            )
+            
+            if is_thinking:
+                # Stop - everything before this is thinking
+                break
+            
+            answer_sentences.insert(0, sent)
+            
+            # Only take 1-2 sentences max for the answer
+            if len(answer_sentences) >= 2:
+                break
+        
+        if answer_sentences:
+            spoken_response = " ".join(answer_sentences).strip()
+            # Make sure the answer is substantial and not just partial
+            if len(spoken_response) > 20 and not thinking_pattern.search(spoken_response.lower()):
+                split_idx = full_response.rfind(spoken_response)
+                if split_idx != -1:
+                    thinking_content = full_response[:split_idx].strip()
+                else:
+                    thinking_content = full_response.replace(spoken_response, "").strip()
+                return (thinking_content if thinking_content else None), clean_spoken_text(spoken_response)
+        
+        # Strategy D: If ENTIRE response is thinking, extract any numbers/facts as the answer
+        # Look for patterns like "$X USD" or "X dollars" or specific prices
+        price_match = re.search(r'\$?([\d,]+(?:\.\d{2})?)\s*(?:USD|dollars?|usd)', full_response, re.IGNORECASE)
+        if price_match:
+            price = price_match.group(1).replace(",", "")
+            # Find context around the price
+            context_match = re.search(r'(?:price|bitcoin|btc).*?\$?' + re.escape(price_match.group(1)), full_response, re.IGNORECASE)
+            if context_match:
+                spoken_response = f"The current price of Bitcoin is approximately ${price} USD."
+                return full_response, clean_spoken_text(spoken_response)
+        
+        # Strategy E: Last resort - the entire response is thinking, return a generic acknowledgment
+        # This prevents TTS from reading the thinking content
+        print("⚠️ Pattern 3: Entire response appears to be thinking - using generic response")
+        return full_response, ""
+
+    # ---------------------------------------------------------------------
+    # PATTERN 4: Answer first, reasoning after blank line
+    # ---------------------------------------------------------------------
+    if "\n\n" in full_response:
+        parts = full_response.split("\n\n", 1)
+        first_part = parts[0].strip()
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        if rest and NEWLINE_REASONING_PATTERN.match(rest) and not is_blacklisted(first_part):
+            return rest, clean_spoken_text(first_part)
+
+    # Default: no thinking separated
+    return None, clean_spoken_text(full_response)
 
 def normalize_for_tts(text: str) -> str:
     """Normalize text for TTS to avoid phonemizer errors (timestamps, commas in numbers, etc.)."""
@@ -171,7 +380,7 @@ class ServerConfig:
     use_vllm: bool = True
     vllm_dtype: str = "float16"  # "float16" or "bfloat16"
     vllm_max_model_len: int = 4096
-    vllm_gpu_memory_utilization: float = 0.90
+    vllm_gpu_memory_utilization: float = 0.60
     vllm_tensor_parallel_size: int = 1
     vllm_enforce_eager: bool = False
     vllm_max_num_seqs: int = 8
@@ -1106,205 +1315,19 @@ Format: <think>analysis</think> spoken answer."""
         
         return messages, should_think
 
-    def generate(self, user_input: str, history: Optional[List[Dict]] = None, 
-                 system_prompt: str = "", use_thinking: bool = False) -> Tuple[str, Optional[str], str]:
-        """Generate LLM response (non-streaming)."""
-        
-        start_time = time.time()
-        messages, should_think = self._build_messages(user_input, history, system_prompt, use_thinking)
-        
-        max_tokens = config.max_tokens_think if should_think else config.max_tokens_fast
-        temperature = config.llm_temperature_think if should_think else config.llm_temperature
-        top_p = config.llm_top_p_think if should_think else config.llm_top_p
+    def _vllm_generate_stream(
+            self,
+            user_input: str,
+            history: Optional[List[Dict]] = None,
+            system_prompt: str = "",
+            use_thinking: bool = False
+        ):
+        """
+        Bridge vLLM Async streaming into this synchronous generator interface.
 
-        # vLLM path (fast)
-        if self.llm_backend == "vllm" and self.vllm_engine is not None:
-            prompt = self.llm_tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-            sampling = self.vllm_sampling_cls(
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-            )
-
-            if self.vllm_async:
-                # Async engine, but non-streaming endpoint: run a single request and collect final text
-                request_id = str(uuid.uuid4())
-
-                async def _run_once() -> str:
-                    final_text = ""
-                    async for out in self.vllm_engine.generate(prompt, sampling, request_id=request_id):
-                        if out.outputs and out.outputs[0].text is not None:
-                            final_text = out.outputs[0].text
-                    return (final_text or "").strip()
-
-                # Run in a private event loop (safe even if called from a threadpool)
-                full_response = asyncio.run(_run_once())
-            else:
-                out = self.vllm_engine.generate([prompt], sampling)
-                full_response = (out[0].outputs[0].text or "").strip()
-
-        else:
-            # HF fallback
-            inputs = self.llm_tokenizer.apply_chat_template(
-                messages,
-                return_tensors="pt",
-                add_generation_prompt=True
-            ).to(config.device)
-
-            attention_mask = torch.ones_like(inputs).to(config.device)
-
-            with torch.no_grad():
-                outputs = self.llm_model.generate(
-                    inputs,
-                    attention_mask=attention_mask,
-                    max_new_tokens=max_tokens,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_p=top_p,
-                    pad_token_id=self.llm_tokenizer.eos_token_id,
-                    use_cache=True
-                )
-
-            full_response = self.llm_tokenizer.decode(
-                outputs[0][inputs.shape[1]:],
-                skip_special_tokens=True
-            ).strip()
-        
-        gen_time = time.time() - start_time
-        metrics.record("llm", gen_time)
-        
-        print(f"🤖 Raw LLM Response ({len(full_response)} chars, {gen_time:.2f}s)...")
-        
-        # Extract thinking vs spoken answer
-        thinking_content = None
-        spoken_response = full_response
-        
-        think_match = THINK_PATTERN.search(full_response)
-        if think_match:
-            inside = think_match.group(1).strip()
-            outside = THINK_PATTERN.sub('', full_response).strip()
-            if len(inside) > len(outside):
-                thinking_content, spoken_response = inside, outside
-            else:
-                thinking_content, spoken_response = outside, inside
-            print(f"✓ Pattern 1: <think> tags")
-
-        elif THINKING_PATTERN.search(full_response):
-            match = THINKING_PATTERN.search(full_response)
-            inside = match.group(1).strip()
-            outside = THINKING_PATTERN.sub('', full_response).strip()
-            if len(inside) > len(outside):
-                thinking_content, spoken_response = inside, outside
-            else:
-                thinking_content, spoken_response = outside, inside
-            print(f"✓ Pattern 2: <thinking> tags")
-
-        elif REASONING_START_PATTERN.match(full_response):
-            print("⚠️ Pattern 3: Model thinking out loud...")
-            
-            # Strategy A: Check for "Phantom Think" separator
-            phantom_split = PHANTOM_THINK_PATTERN.split(full_response)
-            if len(phantom_split) > 1:
-                spoken_response = phantom_split[-1].strip()
-                thinking_content = phantom_split[0].strip()
-                print(f"✓ Found 'phantom think' separator")
-            
-            # Strategy B: Check for quoted answer
-            elif QUOTE_PATTERN.search(full_response):
-                quote_match = QUOTE_PATTERN.search(full_response)
-                spoken_response = quote_match.group(1)
-                
-                # SEPARATION FIX: Thinking is everything BEFORE the quote starts
-                quote_start_index = quote_match.start()
-                thinking_content = full_response[:quote_start_index].strip()
-                
-                print(f"✓ Found quoted answer")
-            
-            # Strategy C: Sentence Splitter (Backwards Scan)
-            else:
-                sentences = SENTENCE_SPLIT_PATTERN.split(full_response)
-                valid_sentences = []
-                
-                # Scan backwards to collect the answer
-                for sent in reversed(sentences):
-                    sent = sent.strip()
-                    if len(sent) < 2: continue
-                    
-                    # STOP if we hit reasoning keywords (e.g., "I should check...")
-                    if REASONING_SENTENCE_PATTERN.match(sent): break
-                    if is_blacklisted(sent): break
-                    
-                    valid_sentences.insert(0, sent)
-                
-                candidate = " ".join(valid_sentences)
-                
-                # Only accept the split if it found a substantial answer
-                if len(candidate) > 50:
-                    spoken_response = candidate
-                    
-                    # SEPARATION FIX: Find where the answer starts and cut the text there
-                    # We use rfind to find the last occurrence (since answer is at the end)
-                    split_idx = full_response.rfind(spoken_response)
-                    
-                    if split_idx != -1:
-                        # Thinking is everything from start (0) up to the answer
-                        thinking_content = full_response[:split_idx].strip()
-                    else:
-                        # Fallback if index lookup fails
-                        thinking_content = full_response.replace(spoken_response, "").strip()
-                        
-                    print(f"✓ Recovered answer via split: {spoken_response[:50]}...")
-                
-                else:
-                    # FAILSAFE: If the split failed (answer too short), try a simple heuristic
-                    print(f"⚠️ Pattern 3 Fallback: Split failed. Attempting first-sentence split.")
-                    
-                    # Assume the first sentence is reasoning (e.g., "Okay, let me check that.")
-                    parts = full_response.split('.', 1)
-                    if len(parts) > 1:
-                        spoken_response = parts[1].strip()
-                        thinking_content = parts[0] + "."
-                    else:
-                        # If all else fails, speak everything and show no thinking
-                        spoken_response = full_response
-                        thinking_content = None
-
-        elif '\n\n' in full_response:
-            parts = full_response.split('\n\n', 1)
-            first_part = parts[0].strip()
-            rest = parts[1].strip() if len(parts) > 1 else ""
-            
-            if rest and NEWLINE_REASONING_PATTERN.match(rest):
-                if not is_blacklisted(first_part):
-                    spoken_response = first_part
-                    thinking_content = rest
-                    print(f"✓ Pattern 4: Answer first")
-
-        if spoken_response:
-            spoken_response = CLEANUP_PREFIX_PATTERN.sub('', spoken_response).strip()
-            spoken_response = CLEANUP_QUOTES_PATTERN.sub('', spoken_response).strip()
-        
-        if not spoken_response or len(spoken_response) < 2:
-            spoken_response = full_response
-
-        print(f"📝 Thinking: {len(thinking_content) if thinking_content else 0} chars")
-        print(f"🗣️ Spoken: {len(spoken_response)} chars")
-        
-        self.conversation_history.append({"role": "user", "content": user_input})
-        self.conversation_history.append({"role": "assistant", "content": spoken_response})
-        
-        return full_response, thinking_content, spoken_response
-
-    def _vllm_generate_stream(self, user_input: str, history: Optional[List[Dict]] = None,
-                              system_prompt: str = "", use_thinking: bool = False):
-        """Bridge vLLM Async streaming into this synchronous generator interface.
-
-        We run the async token stream in a background thread + event loop and push deltas into a queue.
-        This preserves existing websocket streaming behavior with minimal changes.
+        IMPORTANT FIX:
+        - If should_think is True, DO NOT emit any tokens until we've seen the LAST </think>.
+        - Emit ONLY spoken deltas (clean), so TTS never reads <think> or leftovers.
         """
         import queue
 
@@ -1346,61 +1369,236 @@ Format: <think>analysis</think> spoken answer."""
                 q.put(("", True, (full_text or "").strip()))
                 q.put(stop_sentinel)
 
-            # dedicated loop for this thread
             asyncio.run(_run())
 
         threading.Thread(target=_worker, daemon=True).start()
+
+        # ---- streaming state ----
+        raw_full = ""
+        last_spoken_len = 0
+        spoken_started = False  # becomes True once we have crossed LAST </think>
 
         while True:
             item = q.get()
             if item is stop_sentinel:
                 break
-            delta, is_complete, full_text = item
-            yield {"token": delta, "is_complete": is_complete, "full_text": full_text}
 
-    def generate_stream(self, user_input: str, history: Optional[List[Dict]] = None, 
-                        system_prompt: str = "", use_thinking: bool = False):
+            _delta, is_complete, raw_full = item
+
+            # Compute current spoken portion (gated)
+            if should_think:
+                # Gate until last </think> exists
+                if THINK_TAG_CLOSE.search(raw_full):
+                    parts = THINK_TAG_CLOSE.split(raw_full)
+                    after_last_close = (parts[-1] or "").strip()
+                    spoken_now = clean_spoken_text(after_last_close)
+                    spoken_started = True
+                else:
+                    spoken_now = ""
+            else:
+                # No-think mode: stream immediately, but clean any accidental tag/leading "think"
+                spoken_now = clean_spoken_text(raw_full)
+                spoken_started = True
+
+            # Emit only the NEW spoken delta since last time
+            if spoken_started:
+                if len(spoken_now) > last_spoken_len:
+                    spoken_delta = spoken_now[last_spoken_len:]
+                    last_spoken_len = len(spoken_now)
+                else:
+                    spoken_delta = ""
+            else:
+                spoken_delta = ""
+
+            if is_complete:
+                # Final authoritative split (handles weird nested tags / trailing junk)
+                final_thinking, final_spoken = split_thinking_and_spoken(raw_full)
+                if not should_think:
+                    final_thinking = None
+                    final_spoken = clean_spoken_text(final_spoken or raw_full)
+
+                if not final_spoken:
+                    final_spoken = clean_spoken_text(raw_full)
+
+                # Normalize for TTS
+                final_spoken = normalize_for_tts(final_spoken)
+
+                # Make sure final "full_text" is SPOKEN (so downstream doesn't TTS raw)
+                yield {
+                    "token": "",
+                    "is_complete": True,
+                    "full_text": final_spoken,
+                    "thinking": final_thinking,
+                    "raw_full_text": raw_full,
+                }
+
+                # History: spoken only
+                self.conversation_history.append({"role": "user", "content": user_input})
+                self.conversation_history.append({"role": "assistant", "content": final_spoken})
+
+            else:
+                # Normal token tick - only emit if we have a spoken delta
+                if spoken_delta:
+                    yield {
+                        "token": spoken_delta,
+                        "is_complete": False,
+                        "full_text": spoken_now,
+                        "raw_full_text": raw_full,
+                    }
+
+    def generate(
+            self,
+            user_input: str,
+            history: Optional[List[Dict]] = None,
+            system_prompt: str = "",
+            use_thinking: bool = False
+        ) -> Tuple[str, Optional[str], str]:
+        """Generate LLM response (non-streaming)."""
+        start_time = time.time()
+        messages, should_think = self._build_messages(user_input, history, system_prompt, use_thinking)
+        max_tokens = config.max_tokens_think if should_think else config.max_tokens_fast
+        temperature = config.llm_temperature_think if should_think else config.llm_temperature
+        top_p = config.llm_top_p_think if should_think else config.llm_top_p
+
+        # =========================================================
+        # vLLM path (fast)
+        # =========================================================
+        if self.llm_backend == "vllm" and self.vllm_engine is not None:
+            prompt = self.llm_tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            sampling = self.vllm_sampling_cls(
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+            )
+            if self.vllm_async:
+                request_id = str(uuid.uuid4())
+
+                async def _run_once() -> str:
+                    final_text = ""
+                    async for out in self.vllm_engine.generate(prompt, sampling, request_id=request_id):
+                        if out.outputs and out.outputs[0].text is not None:
+                            final_text = out.outputs[0].text
+                    return (final_text or "").strip()
+
+                full_response = asyncio.run(_run_once())
+            else:
+                out = self.vllm_engine.generate([prompt], sampling)
+                full_response = (out[0].outputs[0].text or "").strip()
+
+        # =========================================================
+        # HF fallback
+        # =========================================================
+        else:
+            inputs = self.llm_tokenizer.apply_chat_template(
+                messages,
+                return_tensors="pt",
+                add_generation_prompt=True
+            ).to(config.device)
+            attention_mask = torch.ones_like(inputs).to(config.device)
+
+            with torch.no_grad():
+                outputs = self.llm_model.generate(
+                    inputs,
+                    attention_mask=attention_mask,
+                    max_new_tokens=max_tokens,
+                    do_sample=True,
+                    temperature=temperature,
+                    top_p=top_p,
+                    pad_token_id=self.llm_tokenizer.eos_token_id,
+                    use_cache=True
+                )
+
+            full_response = self.llm_tokenizer.decode(
+                outputs[0][inputs.shape[1]:],
+                skip_special_tokens=True
+            ).strip()
+
+        gen_time = time.time() - start_time
+        metrics.record("llm", gen_time)
+        print(f"🤖 Raw LLM Response ({len(full_response)} chars, {gen_time:.2f}s)...")
+
+        # ✅ SINGLE SOURCE OF TRUTH: split using your hardened splitter
+        thinking_content, spoken_response = split_thinking_and_spoken(full_response)
+
+        # If we're NOT in thinking mode, don't expose any thinking even if model leaked it
+        if not should_think:
+            thinking_content = None
+            spoken_response = clean_spoken_text(spoken_response or full_response)
+
+        if not spoken_response or len(spoken_response) < 2:
+            spoken_response = clean_spoken_text(full_response)
+
+        # Normalize for TTS
+        spoken_response = normalize_for_tts(spoken_response)
+
+        print(f"📝 Thinking: {len(thinking_content) if thinking_content else 0} chars")
+        print(f"🗣️ Spoken: {len(spoken_response)} chars")
+        if should_think and thinking_content:
+            print("✓ Thinking/Spoken split via split_thinking_and_spoken()")
+
+        # Update history with SPOKEN ONLY
+        self.conversation_history.append({"role": "user", "content": user_input})
+        self.conversation_history.append({"role": "assistant", "content": spoken_response})
+
+        return full_response, thinking_content, spoken_response
+
+    def generate_stream(
+            self,
+            user_input: str,
+            history: Optional[List[Dict]] = None,
+            system_prompt: str = "",
+            use_thinking: bool = False
+        ):
         """
         Generate LLM response with STREAMING output.
-        
-        Yields tokens as they are generated for lowest perceived latency.
-        Use this for real-time voice interaction where you want to start
-        TTS synthesis before the full response is complete.
-        
+
+        IMPORTANT FIX:
+        - If vLLM is active, we route through _vllm_generate_stream() which gates on </think>.
+        - If HF streaming is used, we apply the same gating logic.
+
         Yields:
-            dict: {"token": str, "is_complete": bool, "full_text": str}
+            dict: {
+                "token": str,        # Clean spoken delta (safe for TTS)
+                "is_complete": bool,
+                "full_text": str,    # Clean spoken text so far
+                "thinking": str,     # Only on final chunk
+                "raw_full_text": str # Raw LLM output
+            }
         """
-        # vLLM streaming path
-        if self.llm_backend == "vllm" and self.vllm_engine is not None and self.vllm_async:
-            yield from self._vllm_generate_stream(user_input, history=history, system_prompt=system_prompt, use_thinking=use_thinking)
+        # Route vLLM streaming if enabled
+        if self.llm_backend == "vllm" and self.vllm_engine is not None:
+            yield from self._vllm_generate_stream(user_input, history, system_prompt, use_thinking)
             return
 
+        # HF streaming fallback
         from transformers import TextIteratorStreamer
-        
+
         messages, should_think = self._build_messages(user_input, history, system_prompt, use_thinking)
-        
+
         inputs = self.llm_tokenizer.apply_chat_template(
             messages,
             return_tensors="pt",
             add_generation_prompt=True
         ).to(config.device)
-        
+
         attention_mask = torch.ones_like(inputs).to(config.device)
-        
+
         max_tokens = config.max_tokens_think if should_think else config.max_tokens_fast
         temperature = config.llm_temperature_think if should_think else config.llm_temperature
         top_p = config.llm_top_p_think if should_think else config.llm_top_p
-        
-        # Create streamer
+
         streamer = TextIteratorStreamer(
-            self.llm_tokenizer, 
+            self.llm_tokenizer,
             skip_special_tokens=True,
             skip_prompt=True
         )
-        
-        # Generation kwargs
+
         generation_kwargs = dict(
-            inputs,
+            input_ids=inputs,
             attention_mask=attention_mask,
             max_new_tokens=max_tokens,
             do_sample=True,
@@ -1408,40 +1606,76 @@ Format: <think>analysis</think> spoken answer."""
             top_p=top_p,
             pad_token_id=self.llm_tokenizer.eos_token_id,
             use_cache=True,
-            streamer=streamer,
+            streamer=streamer
         )
-        
-        # Run generation in background thread
+
         generation_thread = threading.Thread(
             target=self.llm_model.generate,
             kwargs=generation_kwargs
         )
+        generation_thread.daemon = True
         generation_thread.start()
-        
-        # Stream tokens as they arrive
-        full_text = ""
+
+        raw_full = ""
+        last_spoken_len = 0
+        spoken_started = False
+
         for token in streamer:
-            full_text += token
-            yield {
-                "token": token,
-                "is_complete": False,
-                "full_text": full_text
-            }
-        
+            raw_full += token
+
+            # Gate spoken tokens
+            if should_think:
+                if THINK_TAG_CLOSE.search(raw_full):
+                    parts = THINK_TAG_CLOSE.split(raw_full)
+                    after_last_close = (parts[-1] or "").strip()
+                    spoken_now = clean_spoken_text(after_last_close)
+                    spoken_started = True
+                else:
+                    spoken_now = ""
+            else:
+                spoken_now = clean_spoken_text(raw_full)
+                spoken_started = True
+
+            if spoken_started and len(spoken_now) > last_spoken_len:
+                spoken_delta = spoken_now[last_spoken_len:]
+                last_spoken_len = len(spoken_now)
+                yield {
+                    "token": spoken_delta,
+                    "is_complete": False,
+                    "full_text": spoken_now,
+                    "raw_full_text": raw_full,
+                }
+
         generation_thread.join()
-        
-        # Final yield with complete flag
+
+        # Final authoritative split
+        final_thinking, final_spoken = split_thinking_and_spoken(raw_full)
+
+        if not should_think:
+            final_thinking = None
+            final_spoken = clean_spoken_text(final_spoken or raw_full)
+
+        if not final_spoken:
+            final_spoken = clean_spoken_text(raw_full)
+
+        # Normalize for TTS
+        final_spoken = normalize_for_tts(final_spoken)
+
         yield {
             "token": "",
             "is_complete": True,
-            "full_text": full_text.strip()
+            "full_text": final_spoken,
+            "thinking": final_thinking,
+            "raw_full_text": raw_full,
         }
-        
-        # Update conversation history
+
+        # History: spoken only
         self.conversation_history.append({"role": "user", "content": user_input})
-        self.conversation_history.append({"role": "assistant", "content": full_text.strip()})
-        
-        print(f"🔄 Streaming complete: {len(full_text)} chars")
+        self.conversation_history.append({"role": "assistant", "content": final_spoken})
+
+        print(f"🔄 Streaming complete (spoken): {len(final_spoken)} chars")
+
+
 
     def synthesize_sentence(self, text: str) -> bytes:
         """
@@ -2164,40 +2398,46 @@ async def voice_stream_websocket(websocket: WebSocket):
             for chunk in models.generate_stream(transcript, system_prompt=system_prompt):
                 token = chunk["token"]
                 full_response = chunk["full_text"]
+                in_thinking = chunk.get("in_thinking", False)
+                spoken_so_far = chunk.get("spoken_so_far", "")
                 
-                # Send each token to client for progressive display
+                # Send token to client for progressive display
                 await websocket.send_json({
                     "status": "token",
                     "token": token,
-                    "partial_response": full_response
+                    "partial_response": full_response,
+                    "in_thinking": in_thinking
                 })
                 
-                # Accumulate for sentence-based TTS
-                current_sentence += token
-                
-                # Check if we have a complete sentence
-                if any(current_sentence.rstrip().endswith(p) for p in ['.', '!', '?', ':']):
-                    sentence = current_sentence.strip()
-                    if len(sentence) > 10:  # Only synthesize substantial sentences
-                        # Synthesize this sentence immediately
-                        sentence_count += 1
-                        tts_text = TTS_CLEANUP_PATTERN.sub('', sentence)
-                        tts_text = WHITESPACE_PATTERN.sub(' ', tts_text).strip()
-                        tts_text = normalize_for_tts(tts_text)
-                        
-                        audio_bytes = models.synthesize_sentence(tts_text)
-                        if audio_bytes:
-                            audio_base64 = base64.b64encode(audio_bytes).decode()
-                            await websocket.send_json({
-                                "status": "sentence_audio",
-                                "sentence_number": sentence_count,
-                                "sentence": sentence,
-                                "audio_base64": audio_base64
-                            })
+                # Only accumulate for TTS when NOT in thinking mode
+                if not in_thinking and spoken_so_far:
+                    current_sentence += token
                     
-                    current_sentence = ""
+                    # Check if we have a complete sentence
+                    if any(current_sentence.rstrip().endswith(p) for p in ['.', '!', '?']):
+                        sentence = current_sentence.strip()
+                        if len(sentence) > 10:
+                            sentence_count += 1
+                            tts_text = TTS_CLEANUP_PATTERN.sub('', sentence)
+                            tts_text = WHITESPACE_PATTERN.sub(' ', tts_text).strip()
+                            tts_text = normalize_for_tts(tts_text)
+                            
+                            audio_bytes = models.synthesize_sentence(tts_text)
+                            if audio_bytes:
+                                audio_base64 = base64.b64encode(audio_bytes).decode()
+                                await websocket.send_json({
+                                    "status": "sentence_audio",
+                                    "sentence_number": sentence_count,
+                                    "sentence": sentence,
+                                    "audio_base64": audio_base64
+                                })
+                        
+                        current_sentence = ""
                 
                 if chunk["is_complete"]:
+                    # Get final spoken response from the chunk
+                    final_spoken = chunk.get("spoken_so_far", "")
+                    thinking_content = chunk.get("thinking_content")
                     break
             
             gen_time = time.time() - gen_start
@@ -2283,7 +2523,7 @@ if __name__ == "__main__":
         config.use_torch_compile = False
     
     print("\n" + "="*70)
-    print("🚀 NEMOTRON VOICE AGENT v3.1 - NOW WITH NVIDIA NeMo TTS")
+    print("🚀 NEMOTRON VOICE AGENT - NOW WITH NVIDIA NeMo TTS")
     print("="*70)
     print(f"🔊 TTS Engine:       NVIDIA NeMo FastPitch + HiFi-GAN (~50ms latency)")
     print(f"🧠 Thinking Mode:    {'✅ ENABLED' if config.use_reasoning else '❌ DISABLED'}")
@@ -2308,7 +2548,7 @@ if __name__ == "__main__":
     print(f"📊 Metrics at http://{args.host}:{args.port}/metrics\n")
     
     uvicorn.run(
-        "nemotron_web_server_v31:app" if args.reload else app,
+        "nemotron_web_server:app" if args.reload else app,
         host=args.host,
         port=args.port,
         reload=args.reload
