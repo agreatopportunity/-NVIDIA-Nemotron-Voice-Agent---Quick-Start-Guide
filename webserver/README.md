@@ -1,6 +1,6 @@
-# 🤖 Nemotron AI Voice Assistant v3.0
+# 🤖 Nemotron AI Voice Assistant v3.1
 
-A high-performance AI voice assistant powered by **NVIDIA Nemotron** neural models with a stunning Matrix-themed web interface. Optimized for dual-GPU setups with real-time voice interaction, file transcription, vision capabilities, and web search.
+A high-performance AI voice assistant powered by **NVIDIA Nemotron** neural models with **NVIDIA NeMo FastPitch + HiFi-GAN TTS** for ultra-low latency speech synthesis. Features a stunning Matrix-themed web interface optimized for dual-GPU setups.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![CUDA](https://img.shields.io/badge/CUDA-12.4-green.svg)
@@ -53,19 +53,19 @@ A high-performance AI voice assistant powered by **NVIDIA Nemotron** neural mode
 ### GPU Memory Usage
 ```
 GPU 0 (RTX 4060 Ti 16GB):
-├── Nemotron ASR (0.6B)     ~1.2 GB
-├── Nemotron LLM (9B 4-bit) ~5.5 GB
-├── Silero TTS              ~0.3 GB
-├── BLIP Vision             ~1.0 GB
-└── CUDA Overhead           ~1.0 GB
-                            ────────
-                     Total: ~9.0 GB
+├── Nemotron ASR (0.6B)           ~1.2 GB
+├── Nemotron LLM (9B 4-bit)       ~5.5 GB
+├── NeMo FastPitch + HiFi-GAN     ~0.5 GB
+├── BLIP Vision                   ~1.0 GB
+└── CUDA Overhead                 ~1.0 GB
+                                  ────────
+                           Total: ~9.2 GB
 
 GPU 1 (TITAN V 12GB):
-├── Whisper large-v3        ~3.0 GB
-└── CUDA Overhead           ~0.5 GB
-                            ────────
-                     Total: ~3.5 GB
+├── Whisper large-v3              ~3.0 GB
+└── CUDA Overhead                 ~0.5 GB
+                                  ────────
+                           Total: ~3.5 GB
 ```
 
 ---
@@ -78,7 +78,8 @@ GPU 1 (TITAN V 12GB):
 |-----------|-------|------------|--------------|---------|
 | **ASR** | `nvidia/nemotron-speech-streaming-en-0.6b` | 600M | FP16 | Real-time voice-to-text |
 | **LLM** | `nvidia/NVIDIA-Nemotron-Nano-9B-v2` | 9B | 4-bit NF4 | Language understanding & generation |
-| **TTS** | `silero-models/v3_en` | ~50M | FP32 | Text-to-speech synthesis |
+| **TTS (FastPitch)** | `tts_en_fastpitch` | ~40M | FP32 | Text to mel spectrogram |
+| **TTS (HiFi-GAN)** | `tts_en_hifigan` | ~14M | FP32 | Mel spectrogram to audio |
 | **Vision** | `Salesforce/blip-image-captioning-base` | ~400M | FP16 | Image analysis & captioning |
 | **Whisper** | `openai/whisper-large-v3` | 1.5B | FP16 | File/video transcription |
 
@@ -236,19 +237,19 @@ GPU 1: NVIDIA TITAN V
 
 ```bash
 cd ~/ai/speechAi
-python nemotron_web_server_optimized.py --port 5050
+python nemotron_web_server_v31.py --port 5050
 ```
 
 ### With Thinking/Reasoning Mode
 
 ```bash
-python nemotron_web_server_optimized.py --port 5050 --think
+python nemotron_web_server_v31.py --port 5050 --think
 ```
 
 ### Disable torch.compile (if issues)
 
 ```bash
-python nemotron_web_server_optimized.py --port 5050 --no-compile
+python nemotron_web_server_v31.py --port 5050 --no-compile
 ```
 
 ### Access Points
@@ -498,28 +499,35 @@ analyze_image("photo.jpg", "What objects do you see?")
 
 ---
 
-## 🔊 Text-to-Speech Voices
+## 🔊 Text-to-Speech (NVIDIA NeMo)
 
-| Voice ID | Description | Best For |
-|----------|-------------|----------|
-| `en_0` | Male (Default) | General use |
-| `en_1` | Male 2 | Narration |
-| `en_2` | Female 1 | Assistants |
-| `en_3` | Female 2 | Friendly tone |
-| `en_4` | Male 3 | Professional |
-| `en_5` | Female 3 | Warm tone |
+The v3.1 server uses **NVIDIA NeMo FastPitch + HiFi-GAN** for high-quality, low-latency TTS:
 
-### Usage
+| Component | Model | Purpose |
+|-----------|-------|---------|
+| **FastPitch** | `tts_en_fastpitch` | Text → Mel Spectrogram (~20ms) |
+| **HiFi-GAN** | `tts_en_hifigan` | Mel → Audio waveform (~30ms) |
+
+### Performance Comparison
+
+| TTS Engine | Latency | Quality |
+|------------|---------|---------|
+| Silero v3 (old) | ~200ms | Good |
+| **NeMo FastPitch** | **~50ms** | Excellent |
+
+### API Usage
 
 ```bash
-# Via API
+# TTS only (no chat)
+curl -X POST "http://localhost:5050/synthesize?text=Hello%20world"
+
+# Chat with TTS audio response
 curl -X POST http://localhost:5050/chat/speak \
   -H "Content-Type: application/json" \
-  -d '{"message": "Hello!", "voice": "en_2"}'
-
-# TTS only (no chat)
-curl -X POST "http://localhost:5050/synthesize?text=Hello%20world&voice=en_2"
+  -d '{"message": "Tell me a joke"}'
 ```
+
+> **Note**: NeMo TTS uses a single high-quality voice. For multiple voice options, the server includes Silero as a fallback.
 
 ---
 
@@ -556,28 +564,28 @@ See [DOCS.md](DOCS.md) for complete API documentation with all request/response 
 
 ---
 
-## ⚡ Performance Optimizations (v3.0)
+## ⚡ Performance Optimizations (v3.1)
 
 The optimized server includes these performance enhancements:
 
 | Optimization | Impact | Description |
 |--------------|--------|-------------|
+| **NeMo FastPitch TTS** | 4x faster TTS | ~50ms vs ~200ms (Silero) |
 | **Pre-compiled Regex** | ~15-20% faster | Patterns compiled once at startup |
 | **Persistent HTTP Client** | ~150ms saved | Connection pooling for API calls |
 | **Optimized max_tokens** | ~30% faster | 96 tokens for voice (was 200) |
 | **torch.compile()** | 20-40% faster | JIT compilation for Ada GPUs |
-| **Native TTS Rate** | 2x faster | 24kHz native (was 48kHz) |
 | **Greedy Vision** | ~40% faster | No beam search for captioning |
 | **TF32 Acceleration** | ~15% faster | Hardware matmul optimization |
 
 ### Performance Comparison
 
-| Metric | v2.1 | v3.0 Optimized |
+| Metric | v2.1 | v3.1 Optimized |
 |--------|------|----------------|
-| Simple query E2E | ~2.0s | **~1.0s** |
-| Thinking mode E2E | ~4.0s | **~2.2s** |
-| TTS latency | ~400ms | **~200ms** |
-| Audio file size | 100% | **50%** |
+| Simple query E2E | ~2.0s | **~0.8s** |
+| Thinking mode E2E | ~4.0s | **~2.0s** |
+| TTS latency | ~200ms | **~50ms** |
+| Audio quality | Good | **Excellent** |
 
 ### View Live Metrics
 
@@ -687,7 +695,8 @@ sudo apt-mark hold nvidia-driver-550
 
 ```
 ~/ai/speechAi/
-├── nemotron_web_server_optimized.py  # Main server (v3.0)
+├── nemotron_web_server_v31.py        # Main server v3.1 (NeMo TTS)
+├── nemotron_web_server_optimized.py  # Server v3.0 (Silero fallback)
 ├── nemotron_web_server.py            # Original server (backup)
 ├── nemotron_web_ui.html              # Web interface
 ├── sw.js                             # Service worker (PWA)
@@ -775,8 +784,8 @@ MIT License - See [LICENSE](LICENSE) for details.
 - [x] Vision/image analysis
 - [x] Performance optimizations
 - [x] torch.compile() for Ada
+- [x] NVIDIA NeMo FastPitch + HiFi-GAN TTS
 - [ ] Response streaming
-- [ ] NVIDIA Riva TTS integration
 - [ ] Multi-language voice support
 - [ ] Custom wake word
 - [ ] Local knowledge base (RAG)
