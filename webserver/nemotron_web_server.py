@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Nemotron Voice Agent - OPTIMIZED Web API Server v3.1
+Nemotron Voice Agent - Web API Server
 =====================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
 
