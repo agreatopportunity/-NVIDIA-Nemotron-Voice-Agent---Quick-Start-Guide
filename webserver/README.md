@@ -120,6 +120,8 @@ pip install torch torchvision torchaudio \
 ### 2. Core Dependencies
 
 ```bash
+wget https://developer.download.nvidia.com/compute/cuda/12.4.0/local_installers/cuda_12.4.0_550.54.14_linux.run
+sudo sh cuda_12.4.0_550.54.14_linux.run --toolkit --silent --override
 pip install fastapi uvicorn python-multipart websockets httpx aiofiles python-dotenv
 pip install accelerate bitsandbytes
 pip install "nemo_toolkit[asr,tts]"
