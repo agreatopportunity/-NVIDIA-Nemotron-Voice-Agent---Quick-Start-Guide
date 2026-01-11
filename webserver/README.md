@@ -120,14 +120,14 @@ pip install torch torchvision torchaudio \
 ### 2. Core Dependencies
 
 ```bash
-pip install \
-  fastapi uvicorn python-multipart websockets \
-  httpx pillow aiofiles \
-  transformers accelerate bitsandbytes \
-  "nemo_toolkit[asr,tts]" \
-  vllm \
-  openai-whisper \
-  soundfile librosa
+pip install fastapi uvicorn python-multipart websockets httpx aiofiles python-dotenv
+pip install accelerate bitsandbytes
+pip install "nemo_toolkit[asr,tts]"
+pip install openai-whisper
+pip install soundfile librosa
+pip install vllm
+pip install causal-conv1d --no-build-isolation --no-cache-dir
+pip install mamba-ssm --no-build-isolation --no-cache-dir
 ```
 
 > ⚠️ If NeMo TTS pulls extra deps, follow NeMo’s official install guide for your OS.
