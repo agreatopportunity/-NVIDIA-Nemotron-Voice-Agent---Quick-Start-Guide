@@ -1,4 +1,4 @@
-# 🤖 Nemotron AI Voice Assistant v3.2 (vLLM Enhanced)
+# 🤖 Nemotron AI Voice Assistant
 
 A **high-performance, self-hosted AI voice assistant** powered by **NVIDIA Nemotron** models, featuring:
 
@@ -128,6 +128,7 @@ pip install "nemo_toolkit[asr,tts]"
 pip install openai-whisper
 pip install soundfile librosa
 pip install httpx[http2]
+pip install faster-whisper
 pip install vllm
 pip install causal-conv1d --no-build-isolation --no-cache-dir
 pip install mamba-ssm --no-build-isolation --no-cache-dir
