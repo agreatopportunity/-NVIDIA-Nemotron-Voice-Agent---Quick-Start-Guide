@@ -4,16 +4,16 @@ Nemotron Voice Agent - Web API Server
 =====================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
 
-HARDWARE OPTIMIZED FOR and Tested on:
+HARDWARE OPTIMIZED FOR:
 - GPU 0 (cuda:0): RTX 4060 Ti 16GB - Main models (ASR, LLM, TTS, Vision)
 - GPU 1 (cuda:1): TITAN V 12GB - Whisper file transcription
-- Driver: 550.x (DO NOT UPGRADE - optimal for Volta(TitanV) + Ada(4060ti) mixed setup)
+- Driver: 550.x (DO NOT UPGRADE - optimal for Volta + Ada mixed setup)
 - CUDA: 12.4
 
 Usage:
-    python nemotron_web_server.py
-    python nemotron_web_server.py --think    # Enable reasoning mode
-    python nemotron_web_server.py --port 5050
+    python nemotron_web_server_v31.py
+    python nemotron_web_server_v31.py --think    # Enable reasoning mode
+    python nemotron_web_server_v31.py --port 5050
 
 Environment Variables (.env file):
     OPENWEATHER_API_KEY=your_key_here
@@ -344,11 +344,14 @@ TRAILING_TIME_PATTERN = re.compile(r'\s*(today|tomorrow|now|right now|currently)
 class ServerConfig:
     # GPU Assignment
     device: str = "cuda:0"  # RTX 4060 Ti - Main models
+    device_secondary: str = "cuda:1" # TITAN V - ASR, Vision, Whisper
     whisper_device: str = "cuda:1"  # TITAN V - File transcription
+    whisper_device_index: int = 1  # TITAN V
     
     # Model names
     asr_model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b"
     llm_model_name: str = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
+    #llm_model_name: str = "weathermanj/Nemotron-nano-9b-fp8"
     whisper_model_size: str = "large-v3"
     
     # TTS Models - NVIDIA NeMo FastPitch + HiFi-GAN
@@ -874,7 +877,7 @@ class ModelManager:
             return
             
         print("\n" + "="*70)
-        print("🚀 Loading OPTIMIZED Nemotron Models v3.1")
+        print("🚀 Loading OPTIMIZED Nemotron Models")
         print("   *** NOW WITH NVIDIA NeMo FastPitch + HiFi-GAN TTS ***")
         print(f"   GPU 0 (Main): {torch.cuda.get_device_name(0)}")
         if torch.cuda.device_count() > 1:
@@ -899,12 +902,20 @@ class ModelManager:
         # ================================================================
         print("📝 Loading Nemotron Speech ASR...")
         import nemo.collections.asr as nemo_asr
+
+        # Force NeMo to initialize on GPU 1
+        torch.cuda.set_device(1)
+
         self.asr_model = nemo_asr.models.ASRModel.from_pretrained(
             model_name=config.asr_model_name
-        ).to(config.device)
+        ).to(config.device_secondary)
+
         self.asr_model.eval()
-        vram = torch.cuda.memory_allocated(0) / 1024**3
-        print(f"   ✓ ASR loaded ({vram:.2f} GB VRAM)")
+        # Reset to GPU 0 for LLM loading
+        torch.cuda.set_device(0)
+
+        vram = torch.cuda.memory_allocated(1) / 1024**3
+        print(f"   ✓ ASR loaded aon GPU 1 ({vram:.2f} GB VRAM)")
         
         # ================================================================
         # Load LLM (vLLM preferred; HF fallback)
@@ -979,22 +990,30 @@ class ModelManager:
                     self.llm_backend = "hf"
 
         if self.llm_backend == "hf":
-            # HuggingFace 4-bit NF4 path (kept as a reliable fallback)
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4",
-            )
-
-            self.llm_model = AutoModelForCausalLM.from_pretrained(
-                config.llm_model_name,
-                quantization_config=quantization_config,
-                device_map={"": config.device},
-                trust_remote_code=True,
-                # NOTE: eager attention is slower; prefer default/sdpa when available
-                # attn_implementation="eager"
-            )
+            # Check if model is already FP8 quantized
+            if "fp8" in config.llm_model_name.lower():
+                # FP8 model - load without additional quantization
+                print("   Loading FP8 model without additional quantization...")
+                self.llm_model = AutoModelForCausalLM.from_pretrained(
+                    config.llm_model_name,
+                    device_map={"": config.device},
+                    trust_remote_code=True,
+                    torch_dtype="auto",
+                )
+            else:
+                # Standard model - use 4-bit NF4 quantization
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4",
+                )
+                self.llm_model = AutoModelForCausalLM.from_pretrained(
+                    config.llm_model_name,
+                    quantization_config=quantization_config,
+                    device_map={"": config.device},
+                    trust_remote_code=True,
+                )
             self.llm_model.eval()
         
         if hasattr(self.llm_model, 'generation_config'):
@@ -1059,37 +1078,42 @@ class ModelManager:
             self.vision_model = BlipForConditionalGeneration.from_pretrained(
                 "Salesforce/blip-image-captioning-base",
                 torch_dtype=torch.float16
-            ).to(config.device)
+            ).to(config.device_secondary)
             self.vision_model.eval()
-            vram = torch.cuda.memory_allocated(0) / 1024**3
-            print(f"   ✓ Vision model loaded ({vram:.2f} GB VRAM)")
+            vram = torch.cuda.memory_allocated(1) / 1024**3
+            print(f"   ✓ Vision model loaded on GPU 1 ({vram:.2f} GB VRAM)")
         except Exception as e:
             print(f"   ⚠️ Vision model failed to load: {e}")
             self.vision_model = None
             self.vision_processor = None
         
         # ================================================================
-        # Load Whisper on TITAN V
+        # Load Faster-Whisper on TITAN V
         # ================================================================
         if torch.cuda.device_count() > 1:
-            print(f"🎧 Loading Whisper {config.whisper_model_size} on {torch.cuda.get_device_name(1)}...")
+            print(f"🎧 Loading Faster-Whisper {config.whisper_model_size} on {torch.cuda.get_device_name(1)}...")
             try:
+                from faster_whisper import WhisperModel
+                
+                # Parse "cuda:1" -> 1
+                whisper_device_index = int(str(config.whisper_device).split(":")[1])
+                
                 gpu1_name = torch.cuda.get_device_name(1).lower()
                 if 'titan v' in gpu1_name or 'volta' in gpu1_name or 'v100' in gpu1_name:
-                    print("   ℹ️ Volta GPU detected - FlashAttention disabled")
+                    print("   ℹ️ Volta GPU detected - using float16")
                 
-                import whisper
-                self.whisper_model = whisper.load_model(
+                self.whisper_model = WhisperModel(
                     config.whisper_model_size, 
-                    device=config.whisper_device
+                    device="cuda", 
+                    device_index=whisper_device_index,
+                    compute_type="float16"
                 )
-                vram_titan = torch.cuda.memory_allocated(1) / 1024**3
-                print(f"   ✓ Whisper loaded on TITAN V ({vram_titan:.2f} GB VRAM)")
+                print(f"   ✓ Faster-Whisper loaded on {config.whisper_device}")
             except ImportError:
-                print(f"   ⚠️ Whisper not installed. Install with: pip install openai-whisper")
+                print("   ⚠️ faster-whisper not installed. Install with: pip install faster-whisper")
                 self.whisper_model = None
             except Exception as e:
-                print(f"   ⚠️ Whisper failed to load: {e}")
+                print(f"   ⚠️ Faster-Whisper failed to load: {e}")
                 self.whisper_model = None
         else:
             print("⚠️ Only one GPU detected - Whisper disabled")
@@ -1227,63 +1251,76 @@ class ModelManager:
         return str(result)
     
     def transcribe_file(self, audio_path: str, language: str = None) -> Dict:
-        """Transcribe file using Whisper on TITAN V."""
+        """Transcribe file using Faster-Whisper on TITAN V."""
         if not self.whisper_model:
             return {"error": "Whisper model not loaded. Need second GPU."}
-        
-        import math 
-        start_time = time.time()
-        
-        print(f"🎧 Transcribing with Whisper: {audio_path}")
-        
-        try:
-            if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
-                torch.backends.cuda.enable_flash_sdp(False)
-            
-            result = self.whisper_model.transcribe(
-                audio_path,
-                language=language,
-                task="transcribe",
-                verbose=False,
-                fp16=True
-            )
-            
-            elapsed = time.time() - start_time
-            
-            def safe_float(val):
-                try:
-                    f = float(val)
-                    if math.isnan(f) or math.isinf(f):
-                        return 0.0
-                    return round(f, 2)
-                except (ValueError, TypeError):
-                    return 0.0
 
-            segments = []
-            for seg in result.get("segments", []):
-                segments.append({
-                    "start": safe_float(seg.get("start")),
-                    "end": safe_float(seg.get("end")),
-                    "text": seg.get("text", "").strip()
+        import math
+        start_time = time.time()
+
+        # If your app is primarily English, default to en for more stable results:
+        lang = language or "en"
+
+        print(f"🎧 Transcribing with Faster-Whisper: {audio_path} (lang={lang})")
+
+        def safe_float(val):
+            try:
+                f = float(val)
+                if math.isnan(f) or math.isinf(f):
+                    return 0.0
+                return round(f, 2)
+            except (ValueError, TypeError):
+                return 0.0
+
+        try:
+            segments, info = self.whisper_model.transcribe(
+                audio_path,
+                task="transcribe",
+                language=lang,
+                beam_size=5,
+                vad_filter=True,
+                vad_parameters={
+                    "min_silence_duration_ms": 500
+                },
+            )
+
+            segments_list = list(segments)
+
+            formatted_segments = []
+            texts = []
+            for seg in segments_list:
+                t = (seg.text or "").strip()
+                if t:
+                    texts.append(t)
+                formatted_segments.append({
+                    "start": safe_float(seg.start),
+                    "end": safe_float(seg.end),
+                    "text": t
                 })
-            
-            duration = segments[-1]["end"] if segments else 0.0
-            
-            print(f"✓ Transcription complete in {elapsed:.1f}s ({len(result['text'])} chars)")
-            
+
+            full_text = " ".join(texts).strip()
+            elapsed = time.time() - start_time
+
+            # "Speech end time" (not total audio length)
+            duration = formatted_segments[-1]["end"] if formatted_segments else 0.0
+
+            print(f"✓ Transcription complete in {elapsed:.1f}s ({len(full_text)} chars)")
+
             return {
-                "transcript": result["text"].strip(),
-                "language": result.get("language", "unknown"),
+                "transcript": full_text,
+                "language": getattr(info, "language", lang),
+                "language_probability": round(float(getattr(info, "language_probability", 0.0)), 3),
                 "duration": duration,
-                "segments": segments,
+                "segments": formatted_segments,
                 "processing_time": round(elapsed, 2)
             }
-            
+
         except Exception as e:
             print(f"❌ Whisper transcription error: {e}")
             import traceback
             traceback.print_exc()
             return {"error": str(e)}
+
     
     def _build_messages(self, user_input: str, history: Optional[List[Dict]], 
                          system_prompt: str, use_thinking: bool) -> Tuple[List[Dict], bool]:
@@ -2548,7 +2585,7 @@ if __name__ == "__main__":
     print(f"📊 Metrics at http://{args.host}:{args.port}/metrics\n")
     
     uvicorn.run(
-        "nemotron_web_server:app" if args.reload else app,
+        "nemotron_web_server_v31:app" if args.reload else app,
         host=args.host,
         port=args.port,
         reload=args.reload
