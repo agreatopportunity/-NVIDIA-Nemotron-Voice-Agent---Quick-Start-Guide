@@ -126,6 +126,8 @@ pip install fastapi uvicorn python-multipart websockets httpx aiofiles python-do
 pip install accelerate bitsandbytes
 pip install "nemo_toolkit[asr,tts]"
 pip install faster-whisper
+pip install piper-tts --break-system-packages
+pip install TTS --break-system-packages
 pip install soundfile librosa
 pip install httpx[http2]
 pip install vllm
