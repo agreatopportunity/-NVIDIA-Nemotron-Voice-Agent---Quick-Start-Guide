@@ -124,7 +124,7 @@ wget https://developer.download.nvidia.com/compute/cuda/12.4.0/local_installers/
 sudo sh cuda_12.4.0_550.54.14_linux.run --toolkit --silent --override
 pip install fastapi uvicorn python-multipart websockets httpx aiofiles python-dotenv
 pip install accelerate bitsandbytes
-pip install "nemo_toolkit[asr,tts]"
+pip install "nemo_toolkit[tts]@git+https://github.com/NVIDIA/NeMo.git@main" --break-system-packages
 pip install faster-whisper
 pip install piper-tts --break-system-packages
 pip install TTS --break-system-packages
