@@ -99,7 +99,7 @@ FastAPI Server (Uvicorn)
    ├─ LLM (vLLM async → HF fallback)
    ├─ THINK extraction
    ├─ Sentence streaming
-   ├─ NeMo TTS (FastPitch + HiFi-GAN)
+   ├─ NeMo TTS (FastPitch + HiFi-GAN) ( updated to Magpie ) 
    ├─ Vision (BLIP)
    ├─ Whisper (GPU1)
    ├─ Web Search (Google CSE)
@@ -125,6 +125,7 @@ sudo sh cuda_12.4.0_550.54.14_linux.run --toolkit --silent --override
 pip install fastapi uvicorn python-multipart websockets httpx aiofiles python-dotenv
 pip install accelerate bitsandbytes
 pip install "nemo_toolkit[tts]@git+https://github.com/NVIDIA/NeMo.git@main" --break-system-packages
+pip install kaldialign --break-system-packages
 pip install faster-whisper
 pip install piper-tts --break-system-packages
 pip install TTS --break-system-packages
