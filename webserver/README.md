@@ -304,7 +304,7 @@ python3 nemotron_web_server_vllm.py --list-models
 
 ---
 
-## 📋 All New Arguments
+## 📋 Arguments
 
 | Argument | Values | Description |
 |----------|--------|-------------|
@@ -334,7 +334,7 @@ python3 nemotron_web_server_vllm.py --list-models
 ⚡ torch.compile:    ❌ DISABLED
 🌤️  Weather API:      ✅ CONFIGURED
 🔎 Google Search:    ✅ CONFIGURED
-📍 Default Location: Branson, Missouri
+📍 Default Location: Chicago, Illinois
 🕐 Timezone:         America/Chicago
 ======================================================================
 ```
