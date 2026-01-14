@@ -260,26 +260,89 @@ All APIs are optional. The system runs fully offline without them.
 
 ---
 
-## 🚀 Quick Start
+## Quick Reference - Command Line Usage
 
+#Basic Commands
 ```bash
-# Basic start with thinking mode
-python nemotron_web_server_vllm.py --host 0.0.0.0 --port 5050 --think
+# Default: Use GGUF with config settings
+python3 nemotron_web_server_vllm.py --port 5050 --think
+
+# Use vLLM backend
+python3 nemotron_web_server_vllm.py --port 5050 --think --backend vllm
+
+# Use HuggingFace 4-bit backend
+python3 nemotron_web_server_vllm.py --port 5050 --think --backend hf
 ```
 
-### Optional Flags
-
+# Load Different GGUF Models
 ```bash
-# Disable vLLM (force HF fallback)
-python nemotron_web_server_vllm.py --no-vllm
+# Your default Nemotron model
+python3 nemotron_web_server_vllm.py --port 5050 --think --backend gguf
 
-# Disable torch.compile (recommended for 4-bit fallback)
-python nemotron_web_server_vllm.py --no-compile
+# Load a specific GGUF model
+python3 nemotron_web_server_vllm.py --port 5050 --think --gguf-model models/llama3/llama3-8b.Q4_K_M.gguf
 
-# Hot reload for development
-python nemotron_web_server_vllm.py --reload
+# Load with custom context size
+python3 nemotron_web_server_vllm.py --port 5050 --think --gguf-model models/mistral/mistral-7b.gguf --gguf-ctx 8192
+
+# Load with specific GPU layers (for CPU/GPU split)
+python3 nemotron_web_server_vllm.py --port 5050 --think --gguf-model models/big-model.gguf --gguf-layers 20
+```
+# TTS Options
+```bash
+# Use Magpie TTS with specific voice
+python3 nemotron_web_server_vllm.py --port 5050 --think --tts magpie --voice John
+
+# Use fast NeMo TTS
+python3 nemotron_web_server_vllm.py --port 5050 --think --tts nemo
+```
+# List Available Models
+```bash
+# See what GGUF models are in your models/ folder
+python3 nemotron_web_server_vllm.py --list-models
 ```
 
+---
+
+## 📋 All New Arguments
+
+| Argument | Values | Description |
+|----------|--------|-------------|
+| `--backend` | `gguf`, `vllm`, `hf` | Choose LLM backend |
+| `--gguf-model` | `path/to/model.gguf` | Path to GGUF file |
+| `--gguf-ctx` | `2048`, `4096`, `8192`, etc | Context window size |
+| `--gguf-layers` | `-1` (all), `20`, `30`, etc | GPU layers |
+| `--tts` | `magpie`, `nemo` | TTS engine |
+| `--voice` | `Sofia`, `John`, `Aria`, `Jason`, `Leo` | Magpie voice |
+| `--list-models` | - | List available GGUF files |
+
+---
+
+## 🚀 Example Startup Output
+```
+======================================================================
+🚀 NEMOTRON VOICE AGENT
+======================================================================
+🧠 LLM Backend:      GGUF (llama-cpp)
+   Model Path:       models/nemotron-9b/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf
+   Context Size:     4096
+   GPU Layers:       -1 (-1 = all)
+🔊 TTS Engine:       Magpie TTS (HD quality)
+   Default Voice:    Sofia
+🧠 Thinking Mode:    ✅ ENABLED
+📡 Streaming Mode:   ✅ ENABLED (/ws/voice/stream)
+⚡ torch.compile:    ❌ DISABLED
+🌤️  Weather API:      ✅ CONFIGURED
+🔎 Google Search:    ✅ CONFIGURED
+📍 Default Location: Branson, Missouri
+🕐 Timezone:         America/Chicago
+======================================================================
+```
+
+# Run with GGUF (default)
+```
+python3 nemotron_web_server_vllm.py --port 5050 --think
+```
 ---
 
 ## 🌐 Access Points
