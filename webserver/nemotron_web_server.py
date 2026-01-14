@@ -11,9 +11,9 @@ HARDWARE OPTIMIZED FOR:
 - CUDA: 12.4
 
 Usage:
-    python nemotron_web_server_v31.py
-    python nemotron_web_server_v31.py --think    # Enable reasoning mode
-    python nemotron_web_server_v31.py --port 5050
+    python nemotron_web_server.py
+    python nemotron_web_server.py --think    # Enable reasoning mode
+    python nemotron_web_server.py --port 5050
 
 Environment Variables (.env file):
     OPENWEATHER_API_KEY=your_key_here
