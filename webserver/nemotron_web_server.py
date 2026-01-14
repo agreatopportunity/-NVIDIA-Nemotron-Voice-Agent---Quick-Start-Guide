@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Nemotron Voice Agent - Web API Server
+Nemotron Voice Agent 
 =====================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
 
 HARDWARE OPTIMIZED FOR:
-- GPU 0 (cuda:0): RTX 4060 Ti 16GB - Main models (ASR, LLM, TTS, Vision)
-- GPU 1 (cuda:1): TITAN V 12GB - Whisper file transcription
+- GPU 0 (cuda:0): RTX 4060 Ti 16GB - Main models ( LLM's )
+- GPU 1 (cuda:1): TITAN V 12GB - Whisper file transcription (ASR, TTS, Vision)
 - Driver: 550.x (DO NOT UPGRADE - optimal for Volta + Ada mixed setup)
 - CUDA: 12.4
 
@@ -38,6 +38,23 @@ import uuid
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
+
+# === VOICE ENHANCEMENT IMPORTS ===
+try:
+    from TTS.api import TTS as CoquiTTS
+    XTTS_AVAILABLE = True
+except ImportError:
+    XTTS_AVAILABLE = False
+    print("ℹ️  XTTS not available. Install with: pip install TTS --break-system-packages")
+
+try:
+    from piper import PiperVoice
+    PIPER_AVAILABLE = True
+except ImportError:
+    PIPER_AVAILABLE = False
+    print("ℹ️  Piper not available. Install with: pip install piper-tts --break-system-packages")
+# === END VOICE ENHANCEMENT IMPORTS ===
+
 import hashlib
 
 # Load environment variables from .env file
@@ -294,9 +311,22 @@ def split_thinking_and_spoken(full_response: str) -> tuple[str | None, str]:
                 spoken_response = f"The current price of Bitcoin is approximately ${price} USD."
                 return full_response, clean_spoken_text(spoken_response)
         
-        # Strategy E: Last resort - the entire response is thinking, return a generic acknowledgment
-        # This prevents TTS from reading the thinking content
-        print("⚠️ Pattern 3: Entire response appears to be thinking - using generic response")
+        # Strategy E: Try to extract any final answer-like sentence
+        answer_patterns = [
+            r'(?:the answer is|it\'s|it is|currently|approximately|about)\s+([^.!?]{10,100}[.!?])',
+            r'"([^"]{15,100}[.!?])"',  # Quoted answer
+        ]
+        
+        for pattern in answer_patterns:
+            match = re.search(pattern, full_response, re.IGNORECASE | re.DOTALL)
+            if match:
+                candidate = match.group(1).strip()
+                if not thinking_pattern.search(candidate.lower()[:50]):
+                    print(f"✓ Pattern 3 Strategy E: Extracted answer via pattern")
+                    return full_response, clean_spoken_text(candidate)
+        
+        # Strategy F: Last resort - return EMPTY to signal caller to use safe fallback
+        print("⚠️ Pattern 3: Entire response appears to be thinking - returning empty spoken")
         return full_response, ""
 
     # ---------------------------------------------------------------------
@@ -328,13 +358,12 @@ def normalize_for_tts(text: str) -> str:
 
 # Weather location patterns
 WEATHER_PATTERNS = [
-    re.compile(r'weather (?:in|for|at)\s+([A-Za-z\s]+?)(?:\s*,?\s*([A-Za-z\s]+?))?(?:\s*\?|$|\.)', re.IGNORECASE),
-    re.compile(r"what(?:'s| is) the (?:current )?weather (?:in|for|at)\s+([A-Za-z\s]+?)(?:\s*,?\s*([A-Za-z\s]+?))?(?:\s*\?|$|\.)", re.IGNORECASE),
-    re.compile(r"how(?:'s| is) the weather (?:in|for|at)\s+([A-Za-z\s]+?)(?:\s*,?\s*([A-Za-z\s]+?))?(?:\s*\?|$|\.)", re.IGNORECASE),
-    re.compile(r'(?:temperature|temp) (?:in|for|at)\s+([A-Za-z\s]+?)(?:\s*,?\s*([A-Za-z\s]+?))?(?:\s*\?|$|\.)', re.IGNORECASE),
-    re.compile(r'(?:weather|forecast|temperature)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)', re.IGNORECASE),
+    re.compile(r'weather\s+(?:in|for|at)\s+([A-Za-z][A-Za-z\s]{1,30}?)(?:\s*,\s*([A-Za-z]+))?\s*(?:\?|$|\.|\s+(?:today|tomorrow|now|currently))', re.IGNORECASE),
+    re.compile(r"what(?:'s|\s+is)\s+the\s+(?:current\s+)?weather\s+(?:in|for|at)\s+([A-Za-z][A-Za-z\s]{1,30}?)(?:\s*,\s*([A-Za-z]+))?\s*(?:\?|$|\.)", re.IGNORECASE),
+    re.compile(r"how(?:'s|\s+is)\s+the\s+weather\s+(?:in|for|at)\s+([A-Za-z][A-Za-z\s]{1,30}?)(?:\s*,\s*([A-Za-z]+))?\s*(?:\?|$|\.)", re.IGNORECASE),
+    re.compile(r'(?:temperature|temp)\s+(?:in|for|at)\s+([A-Za-z][A-Za-z\s]{1,30}?)(?:\s*,\s*([A-Za-z]+))?\s*(?:\?|$|\.)', re.IGNORECASE),
 ]
-TRAILING_TIME_PATTERN = re.compile(r'\s*(today|tomorrow|now|right now|currently)\s*$', re.IGNORECASE)
+TRAILING_TIME_PATTERN = re.compile(r'\s*(?:today|tomorrow|now|right\s+now|currently)\s*$', re.IGNORECASE)
 
 # ============================================================================
 # Configuration
@@ -350,13 +379,25 @@ class ServerConfig:
     
     # Model names
     asr_model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b"
+    # Regular Model
     llm_model_name: str = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
-    #llm_model_name: str = "weathermanj/Nemotron-nano-9b-fp8"
+    # Pre Quantized Model
+    #llm_model_name: str = "nvidia/Nemotron-Cascade-8B-Thinking"
     whisper_model_size: str = "large-v3"
     
     # TTS Models - NVIDIA NeMo FastPitch + HiFi-GAN
     tts_fastpitch_model: str = "tts_en_fastpitch"
     tts_hifigan_model: str = "tts_en_hifigan"
+    
+    # TTS Engine Selection: "magpie" (best quality) or "nemo" (fastest)
+    #tts_engine: str = "nemo"
+    tts_engine: str = "magpie"
+    
+    # Magpie TTS Settings (nvidia/magpie_tts_multilingual_357m)
+    magpie_model_name: str = "nvidia/magpie_tts_multilingual_357m"
+    magpie_default_speaker: str = "Sofia"  # John, Sofia, Aria, Jason, Leo
+    magpie_default_language: str = "en"    # en, es, fr, de, it, vi, zh
+    magpie_apply_text_norm: bool = True    # Built-in text normalization
     
     # Audio settings
     sample_rate: int = 16000
@@ -370,8 +411,8 @@ class ServerConfig:
     llm_top_p_think: float = 0.9
     
     # Generation limits - OPTIMIZED
-    max_tokens_fast: int = 96
-    max_tokens_think: int = 256
+    max_tokens_fast: int = 150   # Increased for more complete answers
+    max_tokens_think: int = 384  # Increased for better reasoning
     
     # Feature flags
     use_reasoning: bool = False
@@ -389,6 +430,13 @@ class ServerConfig:
     vllm_max_num_seqs: int = 8
     vllm_disable_log_stats: bool = True
 
+    # GGUF / llama-cpp-python settings
+    llm_backend_preference: str = "gguf"  # "vllm", "hf", or "gguf" - which to try first
+    gguf_model_path: str = "models/nemotron-9b/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf"
+    gguf_n_ctx: int = 4096          # Context window size
+    gguf_n_gpu_layers: int = -1     # -1 = all layers on GPU
+    gguf_n_batch: int = 512         # Batch size for prompt processing
+    gguf_verbose: bool = False      # Verbose llama.cpp output
     
     # API Keys
     google_api_key: str = field(default_factory=lambda: os.getenv("GOOGLE_API_KEY", ""))
@@ -396,8 +444,8 @@ class ServerConfig:
     openweather_api_key: str = field(default_factory=lambda: os.getenv("OPENWEATHER_API_KEY", ""))
     
     # User location
-    user_city: str = "Chicago"
-    user_state: str = "Illinois"
+    user_city: str = "Branson"
+    user_state: str = "Missouri"
     user_country: str = "US"
     user_timezone: str = "America/Chicago"
 
@@ -489,23 +537,32 @@ def get_current_datetime_info() -> str:
 - Year: {now.year}
 - Week Number: {now.isocalendar()[1]}"""
 
-
 def extract_location_from_query(message: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Extract city, state, country from a weather query."""
+    stop_words = {'weather', 'the', 'today', 'tomorrow', 'current', 'currently', 
+                  'like', 'forecast', 'now', 'right', 'outside', 'here', 'there',
+                  'whats', 'hows', 'is', 'in', 'for', 'at', 'temperature', 'temp'}
+    
     for pattern in WEATHER_PATTERNS:
         match = pattern.search(message)
         if match:
             groups = match.groups()
-            city = groups[0].strip().title() if groups[0] else None
-            state_or_country = groups[1].strip().title() if len(groups) > 1 and groups[1] else None
+            city = groups[0].strip() if groups[0] else None
+            state_or_country = groups[1].strip() if len(groups) > 1 and groups[1] else None
             
             if city:
-                city = TRAILING_TIME_PATTERN.sub('', city).strip()
-                
-            if city and city.lower() in ['weather', 'the', 'today', 'tomorrow', 'current', 'like']:
+                city = TRAILING_TIME_PATTERN.sub('', city).strip().title()
+            
+            if not city or city.lower() in stop_words or len(city) < 3:
                 continue
-                
+            
+            if state_or_country:
+                state_or_country = state_or_country.strip().title()
+                if state_or_country.lower() in stop_words:
+                    state_or_country = None
+            
             if city:
+                print(f"📍 Extracted location: city={city}, state={state_or_country}")
                 if state_or_country:
                     state_lower = state_or_country.lower()
                     if state_lower in US_STATES:
@@ -515,8 +572,8 @@ def extract_location_from_query(message: str) -> Tuple[Optional[str], Optional[s
                 else:
                     return (city, None, None)
     
+    print("📍 No location extracted, using defaults")
     return (None, None, None)
-
 
 # ============================================================================
 # Persistent HTTP Client
@@ -692,8 +749,7 @@ async def perform_google_search(query: str) -> str:
         print(f"❌ Search Error: {e}")
         return ""
 
-
-def build_system_prompt(weather_data: str = "", datetime_info: str = "") -> str:
+def build_system_prompt(weather_data: str = "", datetime_info: str = "", web_search_results: str = "") -> str:
     """Build the system prompt with current context."""
     
     prompt = f"""You are Nemotron, a helpful AI voice assistant running on NVIDIA's neural speech models.
@@ -707,6 +763,9 @@ User's Home Location: {config.user_city}, {config.user_state}, {config.user_coun
     if weather_data:
         prompt += f"\n{weather_data}\n"
     
+    if web_search_results:
+        prompt += f"\n{web_search_results}\n"
+
     prompt += """
 Response Guidelines:
 - Keep responses brief and natural since they will be spoken aloud
@@ -749,7 +808,10 @@ def should_fetch_datetime(message: str) -> bool:
 
 def should_web_search(message: str) -> bool:
     msg_lower = message.lower()
-    return any(kw in msg_lower for kw in SEARCH_TRIGGERS)
+    triggered = any(kw in msg_lower for kw in SEARCH_TRIGGERS)
+    if triggered:
+        print(f"🔎 Web search triggered for: {message[:50]}...")
+    return triggered
 
 
 # ============================================================================
@@ -855,7 +917,8 @@ class ModelManager:
         self.asr_model = None
         self.llm_model = None
         self.llm_tokenizer = None
-        self.llm_backend = "hf"  # "vllm" or "hf"
+        self.llama_model = None  # llama-cpp-python model for GGUF
+        self.llm_backend = "hf"  # "vllm", "hf", or "gguf"
         self.vllm_engine = None
         self.vllm_sampling_cls = None
         self.vllm_async = False
@@ -869,6 +932,23 @@ class ModelManager:
         self.whisper_model = None
         self.loaded = False
         self.conversation_history: List[Dict[str, str]] = []
+        
+        # Magpie TTS
+        self.magpie_tts = None
+        self.magpie_speaker_map = {
+            "John": 0,
+            "Sofia": 1,
+            "Aria": 2,
+            "Jason": 3,
+            "Leo": 4
+        }
+
+        # === VOICE ENGINE ATTRIBUTES ===
+        self.xtts_model = None
+        self.piper_voice = None
+        self.tts_engine_active = "nemo"  # Track which engine is loaded
+        # === END VOICE ENGINE ATTRIBUTES ===
+
         self._lock = threading.Lock()
         
     def load_models(self):
@@ -898,26 +978,6 @@ class ModelManager:
             torch.backends.cuda.enable_mem_efficient_sdp(True)
         
         # ================================================================
-        # Load ASR
-        # ================================================================
-        print("📝 Loading Nemotron Speech ASR...")
-        import nemo.collections.asr as nemo_asr
-
-        # Force NeMo to initialize on GPU 1
-        torch.cuda.set_device(1)
-
-        self.asr_model = nemo_asr.models.ASRModel.from_pretrained(
-            model_name=config.asr_model_name
-        ).to(config.device_secondary)
-
-        self.asr_model.eval()
-        # Reset to GPU 0 for LLM loading
-        torch.cuda.set_device(0)
-
-        vram = torch.cuda.memory_allocated(1) / 1024**3
-        print(f"   ✓ ASR loaded aon GPU 1 ({vram:.2f} GB VRAM)")
-        
-        # ================================================================
         # Load LLM (vLLM preferred; HF fallback)
         # ================================================================
         print("🧠 Loading Nemotron LLM (vLLM preferred)...")
@@ -932,11 +992,45 @@ class ModelManager:
         )
 
         self.llm_backend = "hf"
+        self.llama_model = None
         self.vllm_engine = None
         self.vllm_sampling_cls = None
         self.vllm_async = False
 
-        if config.use_vllm:
+        # ================================================================
+        # Try GGUF first if preferred
+        # ================================================================
+        if config.llm_backend_preference == "gguf":
+            try:
+                import os
+                if os.path.exists(config.gguf_model_path):
+                    from llama_cpp import Llama
+                    print(f"   Loading GGUF model: {config.gguf_model_path}")
+                    self.llama_model = Llama(
+                        model_path=config.gguf_model_path,
+                        n_ctx=config.gguf_n_ctx,
+                        n_gpu_layers=config.gguf_n_gpu_layers,
+                        n_batch=config.gguf_n_batch,
+                        verbose=config.gguf_verbose,
+                    )
+                    self.llm_backend = "gguf"
+                    vram = torch.cuda.memory_allocated(0) / 1024**3
+                    print(f"   ✓ GGUF LLM loaded ({vram:.2f} GB VRAM)")
+                else:
+                    print(f"   ⚠️ GGUF file not found: {config.gguf_model_path}")
+                    print("   Falling back to vLLM/HF...")
+            except ImportError:
+                print("   ⚠️ llama-cpp-python not installed")
+                print("   Install with: CMAKE_ARGS=\"-DGGML_CUDA=on\" pip install llama-cpp-python --break-system-packages")
+                print("   Falling back to vLLM/HF...")
+            except Exception as e:
+                print(f"   ⚠️ GGUF loading failed: {e}")
+                print("   Falling back to vLLM/HF...")
+
+        # ================================================================
+        # Try vLLM if GGUF not loaded
+        # ================================================================
+        if self.llm_backend != "gguf" and config.use_vllm:
             try:
                 # Try Async engine first (enables true token streaming)
                 from vllm.engine.arg_utils import AsyncEngineArgs
@@ -989,7 +1083,7 @@ class ModelManager:
                     self.vllm_engine = None
                     self.llm_backend = "hf"
 
-        if self.llm_backend == "hf":
+        if self.llm_backend == "hf" and self.llama_model is None:
             # Check if model is already FP8 quantized
             if "fp8" in config.llm_model_name.lower():
                 # FP8 model - load without additional quantization
@@ -1034,9 +1128,36 @@ class ModelManager:
         print(f"   ✓ LLM loaded ({vram:.2f} GB VRAM)")
         
         # ================================================================
+        # Load ASR
+        # ================================================================
+        print("📝 Loading Nemotron Speech ASR...")
+        import nemo.collections.asr as nemo_asr
+
+        # Force NeMo to initialize on GPU 1
+        torch.cuda.set_device(1)
+
+        self.asr_model = nemo_asr.models.ASRModel.from_pretrained(
+            model_name=config.asr_model_name
+        ).to(config.device_secondary)
+
+        self.asr_model.eval()
+        # Reset to GPU 0 for LLM loading
+        torch.cuda.set_device(0)
+
+        vram = torch.cuda.memory_allocated(1) / 1024**3
+        print(f"   ✓ ASR loaded aon GPU 1 ({vram:.2f} GB VRAM)")
+
+        # ================================================================
         # Load NVIDIA NeMo TTS (FastPitch + HiFi-GAN)
         # ================================================================
-        print("🔊 Loading NVIDIA NeMo TTS (FastPitch + HiFi-GAN)...")
+        # Load TTS based on config
+        if config.tts_engine == "magpie":
+            print("🔊 Loading NVIDIA Magpie TTS (High Quality)...")
+            if not self._load_magpie_tts():
+                print("   ⚠️ Magpie failed, falling back to NeMo FastPitch...")
+                print("🔊 Loading NVIDIA NeMo TTS (FastPitch + HiFi-GAN)...")
+        else:
+            print("🔊 Loading NVIDIA NeMo TTS (FastPitch + HiFi-GAN)...")
         try:
             import nemo.collections.tts as nemo_tts
             
@@ -1164,7 +1285,11 @@ class ModelManager:
         """Run warmup inference."""
         try:
             # Warmup LLM (HF only). vLLM does its own internal warmup on first request.
-            if self.llm_backend == "hf" and self.llm_model is not None:
+            if self.llm_backend == "gguf" and self.llama_model is not None:
+                # Warmup GGUF model
+                _ = self.llama_model("Hello", max_tokens=5)
+                print("   ✓ GGUF model warmed up")
+            elif self.llm_backend == "hf" and self.llm_model is not None:
                 warmup_input = self.llm_tokenizer.encode("Hello", return_tensors="pt").to(config.device)
                 with torch.no_grad():
                     for _ in range(2):
@@ -1183,7 +1308,7 @@ class ModelManager:
             if self.vision_model and self.vision_processor:
                 from PIL import Image
                 dummy_img = Image.new('RGB', (224, 224), color='white')
-                inputs = self.vision_processor(dummy_img, return_tensors="pt").to(config.device, torch.float16)
+                inputs = self.vision_processor(dummy_img, return_tensors="pt").to(config.device_secondary, torch.float16)
                 with torch.no_grad():
                     _ = self.vision_model.generate(**inputs, max_new_tokens=5)
             
@@ -1498,9 +1623,31 @@ Format: <think>analysis</think> spoken answer."""
         top_p = config.llm_top_p_think if should_think else config.llm_top_p
 
         # =========================================================
+        # GGUF path (llama-cpp-python)
+        # =========================================================
+        if self.llm_backend == "gguf" and self.llama_model is not None:
+            # Build prompt using chat template
+            prompt = self.llm_tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            
+            # Generate with llama-cpp
+            output = self.llama_model(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop=["</s>", "<|end|>", "<|eot_id|>", "<|im_end|>"],
+                echo=False,
+            )
+            full_response = (output["choices"][0]["text"] or "").strip()
+
+        # =========================================================
         # vLLM path (fast)
         # =========================================================
-        if self.llm_backend == "vllm" and self.vllm_engine is not None:
+        elif self.llm_backend == "vllm" and self.vllm_engine is not None:
             prompt = self.llm_tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
@@ -1529,7 +1676,7 @@ Format: <think>analysis</think> spoken answer."""
         # =========================================================
         # HF fallback
         # =========================================================
-        else:
+        elif self.llm_backend == "hf" or (self.llm_backend != "gguf" and self.vllm_engine is None):
             inputs = self.llm_tokenizer.apply_chat_template(
                 messages,
                 return_tensors="pt",
@@ -1566,8 +1713,17 @@ Format: <think>analysis</think> spoken answer."""
             thinking_content = None
             spoken_response = clean_spoken_text(spoken_response or full_response)
 
+        # ✅ FIX: Only fall back if NOT in thinking mode AND spoken is empty
+        # When in thinking mode with empty spoken, use a safe default response
         if not spoken_response or len(spoken_response) < 2:
-            spoken_response = clean_spoken_text(full_response)
+            if should_think:
+                # Model returned all thinking, no spoken answer - use safe fallback
+                # DO NOT speak the thinking content!
+                spoken_response = "I've analyzed your request. Could you please rephrase your question?"
+                print("⚠️ Using safe fallback - thinking-only response detected")
+            else:
+                # Not in thinking mode, safe to use cleaned full response
+                spoken_response = clean_spoken_text(full_response)
 
         # Normalize for TTS
         spoken_response = normalize_for_tts(spoken_response)
@@ -1609,6 +1765,11 @@ Format: <think>analysis</think> spoken answer."""
         # Route vLLM streaming if enabled
         if self.llm_backend == "vllm" and self.vllm_engine is not None:
             yield from self._vllm_generate_stream(user_input, history, system_prompt, use_thinking)
+            return
+
+        # Route GGUF streaming if enabled
+        if self.llm_backend == "gguf" and self.llama_model is not None:
+            yield from self._gguf_generate_stream(user_input, history, system_prompt, use_thinking)
             return
 
         # HF streaming fallback
@@ -1712,7 +1873,99 @@ Format: <think>analysis</think> spoken answer."""
 
         print(f"🔄 Streaming complete (spoken): {len(final_spoken)} chars")
 
-
+    def _gguf_generate_stream(
+            self,
+            user_input: str,
+            history: Optional[List[Dict]] = None,
+            system_prompt: str = "",
+            use_thinking: bool = False
+        ):
+        """
+        Generate LLM response with STREAMING using llama-cpp-python.
+        
+        Yields same format as other streaming methods for compatibility.
+        """
+        messages, should_think = self._build_messages(user_input, history, system_prompt, use_thinking)
+        
+        # Build prompt using chat template
+        prompt = self.llm_tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        
+        max_tokens = config.max_tokens_think if should_think else config.max_tokens_fast
+        temperature = config.llm_temperature_think if should_think else config.llm_temperature
+        top_p = config.llm_top_p_think if should_think else config.llm_top_p
+        
+        raw_full = ""
+        last_spoken_len = 0
+        spoken_started = False
+        
+        # Stream tokens from llama-cpp
+        stream = self.llama_model(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=["</s>", "<|end|>", "<|eot_id|>", "<|im_end|>"],
+            echo=False,
+            stream=True,
+        )
+        
+        for output in stream:
+            token = output["choices"][0]["text"] or ""
+            raw_full += token
+            
+            # Gate spoken tokens (same logic as HF streaming)
+            if should_think:
+                if THINK_TAG_CLOSE.search(raw_full):
+                    parts = THINK_TAG_CLOSE.split(raw_full)
+                    after_last_close = (parts[-1] or "").strip()
+                    spoken_now = clean_spoken_text(after_last_close)
+                    spoken_started = True
+                else:
+                    spoken_now = ""
+            else:
+                spoken_now = clean_spoken_text(raw_full)
+                spoken_started = True
+            
+            if spoken_started and len(spoken_now) > last_spoken_len:
+                spoken_delta = spoken_now[last_spoken_len:]
+                last_spoken_len = len(spoken_now)
+                yield {
+                    "token": spoken_delta,
+                    "is_complete": False,
+                    "full_text": spoken_now,
+                    "raw_full_text": raw_full,
+                }
+        
+        # Final authoritative split
+        final_thinking, final_spoken = split_thinking_and_spoken(raw_full)
+        
+        if not should_think:
+            final_thinking = None
+            final_spoken = clean_spoken_text(final_spoken or raw_full)
+        
+        if not final_spoken:
+            final_spoken = clean_spoken_text(raw_full)
+        
+        # Normalize for TTS
+        final_spoken = normalize_for_tts(final_spoken)
+        
+        yield {
+            "token": "",
+            "is_complete": True,
+            "full_text": final_spoken,
+            "thinking": final_thinking,
+            "raw_full_text": raw_full,
+        }
+        
+        # History: spoken only
+        self.conversation_history.append({"role": "user", "content": user_input})
+        self.conversation_history.append({"role": "assistant", "content": final_spoken})
+        
+        print(f"🔄 GGUF Streaming complete (spoken): {len(final_spoken)} chars")
 
     def synthesize_sentence(self, text: str) -> bytes:
         """
@@ -1748,32 +2001,169 @@ Format: <think>analysis</think> spoken answer."""
         
         return b""
 
+
+    def synthesize_xtts(self, text: str, speaker_wav: str = None) -> bytes:
+        """
+        Synthesize speech with XTTS v2 - highest quality with voice cloning.
+        
+        Args:
+            text: Text to speak
+            speaker_wav: Path to voice sample WAV (6+ seconds) for cloning
+                        If None, uses config default or built-in voice
+        
+        Returns:
+            WAV audio bytes
+        """
+        if not self.xtts_model:
+            print("⚠️ XTTS not loaded, falling back to NeMo")
+            return self._synthesize_nemo(text)
+        
+        import io
+        import numpy as np
+        
+        start_time = time.time()
+        
+        try:
+            # Clean text for TTS
+            clean_text = TTS_CLEANUP_PATTERN.sub('', text)
+            clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
+            clean_text = normalize_for_tts(clean_text)
+            
+            if not clean_text or len(clean_text) < 2:
+                return b""
+            
+            # Chunk long text (XTTS works best with <250 chars)
+            max_chunk = 200
+            if len(clean_text) > max_chunk:
+                sentences = SENTENCE_SPLIT_PATTERN.split(clean_text)
+                chunks = []
+                current = ""
+                for sent in sentences:
+                    if len(current) + len(sent) < max_chunk:
+                        current += sent + " "
+                    else:
+                        if current:
+                            chunks.append(current.strip())
+                        current = sent + " "
+                if current:
+                    chunks.append(current.strip())
+            else:
+                chunks = [clean_text]
+            
+            # Use provided speaker wav or config default
+            use_speaker = speaker_wav or config.xtts_speaker_wav
+            use_speaker = use_speaker if use_speaker and Path(use_speaker).exists() else None
+            
+            all_audio = []
+            
+            for chunk in chunks:
+                if not chunk.strip():
+                    continue
+                    
+                if use_speaker:
+                    # Voice cloning mode
+                    audio_list = self.xtts_model.tts(
+                        text=chunk,
+                        speaker_wav=use_speaker,
+                        language="en"
+                    )
+                else:
+                    # Default speaker mode
+                    audio_list = self.xtts_model.tts(
+                        text=chunk,
+                        language="en"
+                    )
+                
+                all_audio.extend(audio_list)
+            
+            if not all_audio:
+                return b""
+            
+            # Convert to numpy array
+            audio_np = np.array(all_audio, dtype=np.float32)
+            
+            # Normalize
+            audio_np = audio_np / (np.abs(audio_np).max() + 1e-7)
+            
+            # Convert to WAV bytes
+            buffer = io.BytesIO()
+            with wave.open(buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(24000)
+                wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
+            
+            elapsed = time.time() - start_time
+            print(f"🔊 XTTS: {len(clean_text)} chars in {elapsed*1000:.0f}ms")
+            
+            return buffer.getvalue()
+            
+        except Exception as e:
+            print(f"❌ XTTS synthesis error: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._synthesize_nemo(text)  # Fallback
+
+
+    def synthesize_piper(self, text: str) -> bytes:
+        """Synthesize with Piper TTS - fast and good quality."""
+        if not self.piper_voice:
+            print("⚠️ Piper not loaded, falling back to NeMo")
+            return self._synthesize_nemo(text)
+        
+        import io
+        
+        start_time = time.time()
+        
+        try:
+            # Clean text
+            clean_text = TTS_CLEANUP_PATTERN.sub('', text)
+            clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
+            clean_text = normalize_for_tts(clean_text)
+            
+            if not clean_text or len(clean_text) < 2:
+                return b""
+            
+            buffer = io.BytesIO()
+            with wave.open(buffer, 'wb') as wav_file:
+                self.piper_voice.synthesize(clean_text, wav_file)
+            
+            elapsed = time.time() - start_time
+            print(f"🔊 Piper: {len(clean_text)} chars in {elapsed*1000:.0f}ms")
+            
+            return buffer.getvalue()
+            
+        except Exception as e:
+            print(f"❌ Piper synthesis error: {e}")
+            return self._synthesize_nemo(text)  # Fallback
+
     def synthesize(self, text: str, speaker_id: str = "default") -> bytes:
         """
-        Synthesize speech using NVIDIA NeMo FastPitch + HiFi-GAN.
-        
-        This is significantly faster and higher quality than Silero:
-        - FastPitch: ~20ms for text -> mel spectrogram
-        - HiFi-GAN: ~30ms for mel spectrogram -> audio
-        - Total: ~50ms (vs ~200ms for Silero)
+        Synthesize speech - routes to best available TTS engine.
+        Priority: Magpie (best) -> NeMo FastPitch (fast) -> Silero (fallback)
         """
         import numpy as np
         import io
         
         start_time = time.time()
         
-        clean_text = clean_numbers_for_tts(text) # Apply number cleaning
+        clean_text = clean_numbers_for_tts(text)
         clean_text = TTS_CLEANUP_PATTERN.sub('', clean_text)
         clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
         
         if not clean_text:
-            return b""
-
-        clean_text = text.strip()
-        if not clean_text:
             clean_text = "I have nothing to say."
         
-        # Use NeMo FastPitch + HiFi-GAN if available
+        # =====================================================
+        # PRIORITY 1: Magpie TTS (highest quality, 5 voices)
+        # =====================================================
+        if self.magpie_tts is not None:
+            speaker = speaker_id if speaker_id in self.magpie_speaker_map else "Sofia"
+            return self.synthesize_magpie(clean_text, speaker=speaker)
+        
+        # =====================================================
+        # PRIORITY 2: NeMo FastPitch + HiFi-GAN (fast, good quality)
+        # =====================================================
         if self.tts_fastpitch and self.tts_hifigan:
             try:
                 # Smart chunking for long text (FastPitch handles ~500 chars well)
@@ -1799,29 +2189,19 @@ Format: <think>analysis</think> spoken answer."""
                         continue
                     
                     with torch.no_grad():
-                        # Step 1: Parse text to tokens
                         parsed = self.tts_fastpitch.parse(chunk)
-                        
-                        # Step 2: Generate mel spectrogram with FastPitch
                         spectrogram = self.tts_fastpitch.generate_spectrogram(tokens=parsed)
-                        
-                        # Step 3: Convert mel spectrogram to audio with HiFi-GAN
                         audio = self.tts_hifigan.convert_spectrogram_to_audio(spec=spectrogram)
                     
-                    # Move to CPU and convert to numpy
                     audio_np = audio.squeeze().cpu().numpy()
                     all_audio.append(audio_np)
                 
                 if not all_audio:
                     return b""
                 
-                # Concatenate all audio chunks
                 combined_audio = np.concatenate(all_audio)
-                
-                # Normalize audio
                 combined_audio = combined_audio / (np.abs(combined_audio).max() + 1e-7)
                 
-                # Convert to WAV bytes
                 buffer = io.BytesIO()
                 with wave.open(buffer, 'wb') as wav_file:
                     wav_file.setnchannels(1)
@@ -1840,13 +2220,15 @@ Format: <think>analysis</think> spoken answer."""
                 import traceback
                 traceback.print_exc()
         
-        # Fallback to Silero if NeMo failed
+        # =====================================================
+        # PRIORITY 3: Silero (fallback)
+        # =====================================================
         if hasattr(self, '_silero_model') and self._silero_model:
             return self._synthesize_silero(clean_text, speaker_id)
         
         print("⚠️ No TTS model available")
         return b""
-    
+
     def _synthesize_silero(self, text: str, speaker_id: str = "en_0") -> bytes:
         """Fallback Silero TTS synthesis."""
         import numpy as np
@@ -1916,6 +2298,136 @@ Format: <think>analysis</think> spoken answer."""
             return "Silero v3 (fallback)"
         else:
             return "None"
+
+    def _load_magpie_tts(self):
+        """Load NVIDIA Magpie TTS - high-quality multilingual TTS with 5 voices."""
+        try:
+            from nemo.collections.tts.models import MagpieTTSModel
+            
+            print(f"   Model: {config.magpie_model_name}")
+            
+            self.magpie_tts = MagpieTTSModel.from_pretrained(config.magpie_model_name)
+            self.magpie_tts = self.magpie_tts.to(config.device_secondary)
+            self.magpie_tts.eval()
+            
+            if torch.cuda.is_available():
+                vram_gb = torch.cuda.memory_allocated(1) / 1024**3
+                print(f"   ✓ Magpie TTS loaded ({vram_gb:.2f} GB VRAM)")
+            
+            print(f"   ✓ Voices: John, Sofia, Aria, Jason, Leo")
+            print(f"   ✓ Languages: en, es, fr, de, it, vi, zh")
+            return True
+            
+        except Exception as e:
+            print(f"   ❌ Magpie TTS load error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def synthesize_magpie(self, text: str, speaker: str = None, language: str = "en") -> bytes:
+        """Synthesize speech with NVIDIA Magpie TTS."""
+        if not self.magpie_tts:
+            return self._synthesize_nemo(text)
+        
+        import io
+        import numpy as np
+        
+        start_time = time.time()
+        
+        try:
+            clean_text = TTS_CLEANUP_PATTERN.sub('', text)
+            clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
+            
+            if not clean_text or len(clean_text) < 2:
+                return b""
+            
+            speaker_name = speaker or "Sofia"
+            speaker_idx = self.magpie_speaker_map.get(speaker_name, 1)
+            
+            with torch.no_grad():
+                audio, audio_len = self.magpie_tts.do_tts(
+                    clean_text,
+                    language=language,
+                    apply_TN=True,
+                    speaker_index=speaker_idx
+                )
+            
+            if isinstance(audio, torch.Tensor):
+                audio_np = audio.squeeze().cpu().numpy()
+            else:
+                audio_np = np.array(audio).squeeze()
+            
+            max_val = np.abs(audio_np).max()
+            if max_val > 0:
+                audio_np = audio_np / max_val * 0.95
+            
+            buffer = io.BytesIO()
+            import wave
+            with wave.open(buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(22050)
+                wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
+            
+            elapsed = time.time() - start_time
+            print(f"🔊 Magpie ({speaker_name}): {len(clean_text)} chars in {elapsed*1000:.0f}ms")
+            
+            return buffer.getvalue()
+            
+        except Exception as e:
+            print(f"❌ Magpie error: {e}")
+            return self._synthesize_nemo(text)
+
+    def _load_xtts(self):
+        """Load Coqui XTTS v2 for high-quality voice synthesis with voice cloning."""
+        if not XTTS_AVAILABLE:
+            print("⚠️ XTTS not installed - skipping")
+            return False
+            
+        try:
+            print("🔊 Loading XTTS v2 (first load downloads ~2GB model)...")
+            self.xtts_model = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2")
+            
+            # Move to GPU if available
+            if torch.cuda.is_available():
+                self.xtts_model.to(config.device)
+                
+            print("✓ XTTS v2 loaded - natural voice synthesis ready!")
+            self.tts_engine_active = "xtts"
+            return True
+        except Exception as e:
+            print(f"❌ XTTS load failed: {e}")
+            self.xtts_model = None
+            return False
+
+    def _load_piper(self):
+        """Load Piper TTS - fast and natural sounding."""
+        if not PIPER_AVAILABLE:
+            print("⚠️ Piper not installed - skipping")
+            return False
+            
+        try:
+            model_path = Path(config.piper_model_path) if config.piper_model_path else None
+            
+            if not model_path or not model_path.exists():
+                # Try default location
+                default_path = Path(__file__).parent / "piper_voices" / "en_US-amy-medium.onnx"
+                if default_path.exists():
+                    model_path = default_path
+                else:
+                    print("⚠️ Piper voice model not found. Download from:")
+                    print("   https://github.com/rhasspy/piper/releases")
+                    return False
+            
+            config_path = model_path.with_suffix(".onnx.json")
+            self.piper_voice = PiperVoice.load(str(model_path), str(config_path))
+            print(f"✓ Piper TTS loaded: {model_path.name}")
+            self.tts_engine_active = "piper"
+            return True
+        except Exception as e:
+            print(f"❌ Piper load failed: {e}")
+            self.piper_voice = None
+            return False
 
     def clean_numbers_for_tts(text):
         """
@@ -2251,6 +2763,84 @@ async def update_location(city: str, state: str, country: str = "US", timezone: 
         "timezone": timezone
     }
 
+
+# === VOICE LISTING ENDPOINT ===
+class VoiceInfo(BaseModel):
+    id: str
+    name: str
+    engine: str
+    description: str = ""
+
+class VoicesResponse(BaseModel):
+    current_engine: str
+    available_engines: List[str]
+    voices: List[VoiceInfo]
+
+@app.get("/voices", response_model=VoicesResponse)
+async def get_available_voices():
+    """Get list of available TTS voices and engines."""
+    available_engines = ["nemo"]  # Always available
+    voices = []
+    
+    # NeMo voices (always available)
+    nemo_voices = [
+        VoiceInfo(id="0", name="Neural Voice 0 (Male)", engine="nemo", description="Default male voice"),
+        VoiceInfo(id="1", name="Neural Voice 1 (Male Deep)", engine="nemo", description="Deeper male voice"),
+        VoiceInfo(id="2", name="Neural Voice 2 (Male)", engine="nemo", description="Alternative male"),
+        VoiceInfo(id="3", name="Neural Voice 3 (Female)", engine="nemo", description="Female voice"),
+        VoiceInfo(id="4", name="Neural Voice 4 (Female)", engine="nemo", description="Alternative female"),
+        VoiceInfo(id="5", name="Neural Voice 5 (Male)", engine="nemo", description="Casual male"),
+        VoiceInfo(id="6", name="Neural Voice 6 (Female)", engine="nemo", description="Professional female"),
+        VoiceInfo(id="7", name="Neural Voice 7 (Male)", engine="nemo", description="Warm male"),
+        VoiceInfo(id="8", name="Neural Voice 8 (Female)", engine="nemo", description="Friendly female"),
+        VoiceInfo(id="9", name="Neural Voice 9 (Male)", engine="nemo", description="Clear male"),
+    ]
+    voices.extend(nemo_voices)
+    
+    # XTTS voices (if available)
+    if models.xtts_model:
+        available_engines.append("xtts")
+        xtts_voices = [
+            VoiceInfo(id="default", name="XTTS Natural", engine="xtts", description="High-quality natural voice"),
+        ]
+        if config.xtts_speaker_wav and Path(config.xtts_speaker_wav).exists():
+            xtts_voices.append(
+                VoiceInfo(id="cloned", name="XTTS Cloned Voice", engine="xtts", description="Your custom cloned voice")
+            )
+        voices.extend(xtts_voices)
+    
+    # Piper voices (if available)
+    if models.piper_voice:
+        available_engines.append("piper")
+        piper_voices = [
+            VoiceInfo(id="default", name="Piper Amy", engine="piper", description="Fast, natural female voice"),
+        ]
+        voices.extend(piper_voices)
+    
+    return VoicesResponse(
+        current_engine=config.tts_engine,
+        available_engines=available_engines,
+        voices=voices
+    )
+
+@app.post("/voices/engine")
+async def set_voice_engine(engine: str):
+    """Switch the active TTS engine."""
+    valid_engines = ["magpie", "nemo", "xtts", "piper"]
+    if engine not in valid_engines:
+        raise HTTPException(status_code=400, detail=f"Invalid engine. Choose from: {valid_engines}")
+    
+    if engine == "xtts" and not models.xtts_model:
+        raise HTTPException(status_code=400, detail="XTTS not available. Install with: pip install TTS")
+    
+    if engine == "piper" and not models.piper_voice:
+        raise HTTPException(status_code=400, detail="Piper not available. Install with: pip install piper-tts")
+    
+    config.tts_engine = engine
+    return {"status": "ok", "engine": engine}
+# === END VOICE LISTING ENDPOINT ===
+
+
 # ============================================================================
 # WebSocket - Real-time Voice
 # ============================================================================
@@ -2539,19 +3129,99 @@ if static_path.exists():
 # Main Entry Point
 # ============================================================================
 
+def list_available_models(models_dir: str = "models") -> dict:
+    """Scan models directory for available GGUF files."""
+    import glob
+    models = {}
+    if os.path.exists(models_dir):
+        for gguf_file in glob.glob(f"{models_dir}/**/*.gguf", recursive=True):
+            name = os.path.basename(gguf_file)
+            size_gb = os.path.getsize(gguf_file) / (1024**3)
+            models[name] = {"path": gguf_file, "size_gb": size_gb}
+    return models
+
+
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Nemotron Voice Agent v3.1 - NeMo TTS")
+    parser = argparse.ArgumentParser(
+        description="Nemotron Voice Agent v3.3 - Multi-Backend LLM with NeMo TTS",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Use GGUF backend (default)
+  python %(prog)s --port 5050 --think
+
+  # Use a specific GGUF model
+  python %(prog)s --port 5050 --backend gguf --gguf-model models/llama3/llama3-8b.gguf
+
+  # Use vLLM backend
+  python %(prog)s --port 5050 --backend vllm
+
+  # Use HuggingFace 4-bit backend
+  python %(prog)s --port 5050 --backend hf
+
+  # List available GGUF models
+  python %(prog)s --list-models
+        """
+    )
+    
+    # Server settings
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
+    
+    # Feature flags
     parser.add_argument("--think", action="store_true", help="Enable thinking mode")
     parser.add_argument("--stream", action="store_true", help="Enable streaming")
     parser.add_argument("--no-compile", action="store_true", help="Disable torch.compile")
     
+    # LLM Backend Selection
+    parser.add_argument("--backend", choices=["gguf", "vllm", "hf"], default=None,
+                        help="LLM backend: gguf (local GGUF), vllm (fast), hf (HuggingFace 4-bit)")
+    parser.add_argument("--gguf-model", type=str, default=None,
+                        help="Path to GGUF model file (e.g., models/llama3/llama3-8b.gguf)")
+    parser.add_argument("--gguf-ctx", type=int, default=None,
+                        help="GGUF context window size (default: 4096)")
+    parser.add_argument("--gguf-layers", type=int, default=None,
+                        help="GGUF GPU layers (-1 = all on GPU, default: -1)")
+    
+    # TTS Selection
+    parser.add_argument("--tts", choices=["magpie", "nemo"], default=None,
+                        help="TTS engine: magpie (HD quality) or nemo (fast)")
+    parser.add_argument("--voice", type=str, default=None,
+                        help="Default voice (Magpie: Sofia, Aria, John, Jason, Leo)")
+    
+    # Utility
+    parser.add_argument("--list-models", action="store_true",
+                        help="List available GGUF models and exit")
+    
     args = parser.parse_args()
     
+    # Handle --list-models
+    if args.list_models:
+        print("\n" + "="*70)
+        print("📦 AVAILABLE GGUF MODELS")
+        print("="*70)
+        models = list_available_models()
+        if models:
+            for name, info in models.items():
+                print(f"  📄 {name}")
+                print(f"     Path: {info['path']}")
+                print(f"     Size: {info['size_gb']:.2f} GB")
+                print()
+            print("="*70)
+            print("Usage: python nemotron_web_server_vllm.py --gguf-model <path>")
+            print("="*70)
+        else:
+            print("  No GGUF models found in 'models/' directory")
+            print()
+            print("  Download models and place them in:")
+            print("    models/<model-name>/<model-file>.gguf")
+            print("="*70)
+        sys.exit(0)
+    
+    # Apply command line overrides to config
     if args.think:
         config.use_reasoning = True
     if args.stream:
@@ -2559,10 +3229,47 @@ if __name__ == "__main__":
     if args.no_compile:
         config.use_torch_compile = False
     
+    # LLM Backend overrides
+    if args.backend:
+        config.llm_backend_preference = args.backend
+    if args.gguf_model:
+        config.gguf_model_path = args.gguf_model
+        # Auto-switch to GGUF if model path specified
+        if not args.backend:
+            config.llm_backend_preference = "gguf"
+    if args.gguf_ctx:
+        config.gguf_n_ctx = args.gguf_ctx
+    if args.gguf_layers is not None:
+        config.gguf_n_gpu_layers = args.gguf_layers
+    
+    # TTS overrides
+    if args.tts:
+        config.tts_engine = args.tts
+    if args.voice:
+        config.magpie_default_speaker = args.voice
+    
+    # Backend display names
+    backend_names = {
+        "gguf": "GGUF (llama-cpp)",
+        "vllm": "vLLM (async)",
+        "hf": "HuggingFace 4-bit"
+    }
+    tts_names = {
+        "magpie": "Magpie TTS (HD quality)",
+        "nemo": "NeMo FastPitch (~50ms)"
+    }
+    
     print("\n" + "="*70)
-    print("🚀 NEMOTRON VOICE AGENT - NOW WITH NVIDIA NeMo TTS")
+    print("🚀 NEMOTRON VOICE AGENT ")
     print("="*70)
-    print(f"🔊 TTS Engine:       NVIDIA NeMo FastPitch + HiFi-GAN (~50ms latency)")
+    print(f"🧠 LLM Backend:      {backend_names.get(config.llm_backend_preference, config.llm_backend_preference)}")
+    if config.llm_backend_preference == "gguf":
+        print(f"   Model Path:       {config.gguf_model_path}")
+        print(f"   Context Size:     {config.gguf_n_ctx}")
+        print(f"   GPU Layers:       {config.gguf_n_gpu_layers} (-1 = all)")
+    print(f"🔊 TTS Engine:       {tts_names.get(config.tts_engine, config.tts_engine)}")
+    if config.tts_engine == "magpie":
+        print(f"   Default Voice:    {config.magpie_default_speaker}")
     print(f"🧠 Thinking Mode:    {'✅ ENABLED' if config.use_reasoning else '❌ DISABLED'}")
     print(f"📡 Streaming Mode:   ✅ ENABLED (/ws/voice/stream)")
     print(f"⚡ torch.compile:    {'✅ ENABLED' if config.use_torch_compile else '❌ DISABLED'}")
@@ -2571,13 +3278,10 @@ if __name__ == "__main__":
     print(f"📍 Default Location: {config.user_city}, {config.user_state}")
     print(f"🕐 Timezone:         {config.user_timezone}")
     print("="*70)
-    print("📊 TTS PERFORMANCE COMPARISON:")
-    print("   • Silero v3:        ~200ms latency")
-    print("   • NeMo FastPitch:   ~50ms latency  ⚡ 4x FASTER")
-    print("="*70)
-    print("📡 STREAMING ENDPOINTS:")
+    print("📡 ENDPOINTS:")
     print("   • /ws/voice        - Standard (full response then TTS)")
     print("   • /ws/voice/stream - Streaming (token-by-token + sentence TTS)")
+    print("   • /chat/speak      - REST API with audio response")
     print("="*70)
     
     print(f"\n🌐 Starting server at http://{args.host}:{args.port}")
@@ -2585,7 +3289,7 @@ if __name__ == "__main__":
     print(f"📊 Metrics at http://{args.host}:{args.port}/metrics\n")
     
     uvicorn.run(
-        "nemotron_web_server_v31:app" if args.reload else app,
+        "nemotron_web_server:app" if args.reload else app,
         host=args.host,
         port=args.port,
         reload=args.reload
