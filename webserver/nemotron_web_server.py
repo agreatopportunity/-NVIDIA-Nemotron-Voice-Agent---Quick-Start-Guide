@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Nemotron Voice Agent 
+Nemotron Voice Agent - OPTIMIZED Web API Server
 =====================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
 
@@ -380,10 +380,15 @@ class ServerConfig:
     # Model names
     asr_model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b"
     # Regular Model
-    llm_model_name: str = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
+    #llm_model_name: str = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
+    llm_model_name: str = "/home/gw878/text-gen/user_data/models/Qwen_Qwen3-8B"
     # Pre Quantized Model
     #llm_model_name: str = "nvidia/Nemotron-Cascade-8B-Thinking"
-    whisper_model_size: str = "large-v3"
+
+    # File Transcription Model
+    canary_model_name: str = "nvidia/canary-1b-flash"
+    use_canary: bool = True  # Set False to use Whisper instead
+    whisper_model_size: str = "large-v3"  # Fallback if Canary fails
     
     # TTS Models - NVIDIA NeMo FastPitch + HiFi-GAN
     tts_fastpitch_model: str = "tts_en_fastpitch"
@@ -444,8 +449,8 @@ class ServerConfig:
     openweather_api_key: str = field(default_factory=lambda: os.getenv("OPENWEATHER_API_KEY", ""))
     
     # User location
-    user_city: str = "Chicago"
-    user_state: str = "Illinois"
+    user_city: str = "Illinois"
+    user_state: str = "Chicago"
     user_country: str = "US"
     user_timezone: str = "America/Chicago"
 
@@ -948,20 +953,26 @@ class ModelManager:
         self.piper_voice = None
         self.tts_engine_active = "nemo"  # Track which engine is loaded
         # === END VOICE ENGINE ATTRIBUTES ===
-
+        # === MODEL STATE TRACKING
+        self.actual_llm_backend = None
+        self.actual_llm_model = None
+        self.actual_tts_engine = None
+        self.actual_transcription_model = None
+        # === END MODEL STATE TRACKING ===
         self._lock = threading.Lock()
+
         
     def load_models(self):
         """Load all models with optimizations."""
         if self.loaded:
             return
-            
+        # === LOADED INFO
         print("\n" + "="*70)
         print("🚀 Loading OPTIMIZED Nemotron Models")
         print("   *** NOW WITH NVIDIA NeMo FastPitch + HiFi-GAN TTS ***")
         print(f"   GPU 0 (Main): {torch.cuda.get_device_name(0)}")
         if torch.cuda.device_count() > 1:
-            print(f"   GPU 1 (Whisper): {torch.cuda.get_device_name(1)}")
+            print(f"   GPU 1 (ASR/TTS): {torch.cuda.get_device_name(1)}")
         print("="*70)
         
         start_time = time.time()
@@ -1014,6 +1025,8 @@ class ModelManager:
                         verbose=config.gguf_verbose,
                     )
                     self.llm_backend = "gguf"
+                    self.actual_llm_backend = "gguf"
+                    self.actual_llm_model = config.gguf_model_path
                     vram = torch.cuda.memory_allocated(0) / 1024**3
                     print(f"   ✓ GGUF LLM loaded ({vram:.2f} GB VRAM)")
                 else:
@@ -1053,6 +1066,8 @@ class ModelManager:
                 self.vllm_sampling_cls = SamplingParams
                 self.llm_backend = "vllm"
                 self.vllm_async = True
+                self.actual_llm_backend = "vllm-async"
+                self.actual_llm_model = config.llm_model_name
                 print("   ✓ LLM loaded with vLLM Async engine")
 
             except Exception as e:
@@ -1075,6 +1090,8 @@ class ModelManager:
                     self.vllm_sampling_cls = SamplingParams
                     self.llm_backend = "vllm"
                     self.vllm_async = False
+                    self.actual_llm_backend = "vllm-sync"
+                    self.actual_llm_model = config.llm_model_name
                     print("   ✓ LLM loaded with vLLM Sync engine (non-streaming)")
 
                 except Exception as e2:
@@ -1124,8 +1141,13 @@ class ModelManager:
             except Exception as e:
                 print(f"   ⚠️ torch.compile() failed: {e}")
         
+        if self.llm_backend == "hf" and self.actual_llm_backend is None:
+            self.actual_llm_backend = "hf-4bit"
+            self.actual_llm_model = config.llm_model_name
+        
         vram = torch.cuda.memory_allocated(0) / 1024**3
-        print(f"   ✓ LLM loaded ({vram:.2f} GB VRAM)")
+        print(f"   ✓ LLM loaded ({vram:.2f} GB VRAM) - Backend: {self.actual_llm_backend}")
+
         
         # ================================================================
         # Load ASR
@@ -1209,36 +1231,70 @@ class ModelManager:
             self.vision_processor = None
         
         # ================================================================
-        # Load Faster-Whisper on TITAN V
+        # Load File Transcription Model (Canary preferred, Whisper fallback)
         # ================================================================
+        self.canary_model = None
+        self.whisper_model = None
+        
         if torch.cuda.device_count() > 1:
-            print(f"🎧 Loading Faster-Whisper {config.whisper_model_size} on {torch.cuda.get_device_name(1)}...")
-            try:
-                from faster_whisper import WhisperModel
-                
-                # Parse "cuda:1" -> 1
-                whisper_device_index = int(str(config.whisper_device).split(":")[1])
-                
-                gpu1_name = torch.cuda.get_device_name(1).lower()
-                if 'titan v' in gpu1_name or 'volta' in gpu1_name or 'v100' in gpu1_name:
-                    print("   ℹ️ Volta GPU detected - using float16")
-                
-                self.whisper_model = WhisperModel(
-                    config.whisper_model_size, 
-                    device="cuda", 
-                    device_index=whisper_device_index,
-                    compute_type="float16"
-                )
-                print(f"   ✓ Faster-Whisper loaded on {config.whisper_device}")
-            except ImportError:
-                print("   ⚠️ faster-whisper not installed. Install with: pip install faster-whisper")
-                self.whisper_model = None
-            except Exception as e:
-                print(f"   ⚠️ Faster-Whisper failed to load: {e}")
-                self.whisper_model = None
+            # Try Canary-1B-Flash first (faster, more accurate, less VRAM)
+            if config.use_canary:
+                print(f"🎧 Loading NVIDIA Canary-1B-Flash on {torch.cuda.get_device_name(1)}...")
+                try:
+                    import nemo.collections.asr as nemo_asr
+                    
+                    # Force load on GPU 1
+                    torch.cuda.set_device(1)
+                    
+                    self.canary_model = nemo_asr.models.ASRModel.from_pretrained(
+                        model_name=config.canary_model_name
+                    ).to(config.device_secondary)
+                    self.canary_model.eval()
+                    
+                    # Reset to GPU 0
+                    torch.cuda.set_device(0)
+                    
+                    vram = torch.cuda.memory_allocated(1) / 1024**3
+                    print(f"   ✓ Canary-1B-Flash loaded on GPU 1 ({vram:.2f} GB VRAM)")
+                    self.actual_transcription_model = "canary-1b-flash"
+                    
+                except Exception as e:
+                    print(f"   ⚠️ Canary failed to load: {e}")
+                    print("   Falling back to Faster-Whisper...")
+                    torch.cuda.set_device(0)  # Reset
+                    self.canary_model = None
+            
+            # Fallback to Whisper if Canary not loaded
+            if self.canary_model is None:
+                print(f"🎧 Loading Faster-Whisper {config.whisper_model_size} on {torch.cuda.get_device_name(1)}...")
+                try:
+                    from faster_whisper import WhisperModel
+                    
+                    whisper_device_index = int(str(config.whisper_device).split(":")[1])
+                    
+                    gpu1_name = torch.cuda.get_device_name(1).lower()
+                    if 'titan v' in gpu1_name or 'volta' in gpu1_name or 'v100' in gpu1_name:
+                        print("   ℹ️ Volta GPU detected - using float16")
+                    
+                    self.whisper_model = WhisperModel(
+                        config.whisper_model_size, 
+                        device="cuda", 
+                        device_index=whisper_device_index,
+                        compute_type="float16"
+                    )
+                    print(f"   ✓ Faster-Whisper loaded on {config.whisper_device}")
+                    self.actual_transcription_model = f"whisper-{config.whisper_model_size}"
+                    
+                except ImportError:
+                    print("   ⚠️ faster-whisper not installed. Install with: pip install faster-whisper")
+                    self.whisper_model = None
+                except Exception as e:
+                    print(f"   ⚠️ Faster-Whisper failed to load: {e}")
+                    self.whisper_model = None
         else:
-            print("⚠️ Only one GPU detected - Whisper disabled")
+            print("⚠️ Only one GPU detected - File transcription disabled")
             self.whisper_model = None
+            self.canary_model = None
         
         total_time = time.time() - start_time
         print(f"\n✅ All models loaded in {total_time:.1f}s")
@@ -1246,8 +1302,14 @@ class ModelManager:
         if torch.cuda.device_count() > 1:
             print(f"📊 GPU 1 VRAM: {torch.cuda.memory_allocated(1) / 1024**3:.2f} GB")
         print("="*70)
+        print("⚡ ACTUAL LOADED MODELS:")
+        print(f"   • LLM Backend: {self.actual_llm_backend or self.llm_backend.upper()}")
+        print(f"   • LLM Model: {self.actual_llm_model or config.llm_model_name}")
+        print(f"   • TTS Engine: {'Magpie HD' if self.magpie_tts else 'NeMo FastPitch' if self.tts_fastpitch else 'Silero (fallback)'}")
+        print(f"   • Transcription: {self.actual_transcription_model or 'None'}")
+        print(f"   • Vision: {'BLIP' if self.vision_model else 'None'}")
+        print("="*70)
         print("⚡ OPTIMIZATION STATUS:")
-        print(f"   • TTS Engine: {'NVIDIA NeMo FastPitch + HiFi-GAN' if self.tts_fastpitch else 'Silero (fallback)'}")
         print(f"   • TF32 Matmul: ENABLED")
         print(f"   • cuDNN Benchmark: ENABLED")
         print(f"   • torch.compile: {'ENABLED' if config.use_torch_compile else 'DISABLED'}")
@@ -1376,18 +1438,77 @@ class ModelManager:
         return str(result)
     
     def transcribe_file(self, audio_path: str, language: str = None) -> Dict:
-        """Transcribe file using Faster-Whisper on TITAN V."""
-        if not self.whisper_model:
-            return {"error": "Whisper model not loaded. Need second GPU."}
-
+        """Transcribe file using Canary (preferred) or Whisper (fallback) on TITAN V."""
+        
+        # Try Canary first
+        if self.canary_model is not None:
+            return self._transcribe_with_canary(audio_path, language)
+        
+        # Fall back to Whisper
+        if self.whisper_model is not None:
+            return self._transcribe_with_whisper(audio_path, language)
+        
+        return {"error": "No transcription model loaded. Need second GPU."}
+    
+    def _transcribe_with_canary(self, audio_path: str, language: str = None) -> Dict:
+        """Transcribe using NVIDIA Canary-1B-Flash."""
         import math
         start_time = time.time()
-
-        # If your app is primarily English, default to en for more stable results:
+        
+        print(f"🎧 Transcribing with Canary: {audio_path}")
+        
+        try:
+            with torch.no_grad():
+                # Canary returns list of hypotheses
+                transcriptions = self.canary_model.transcribe([audio_path])
+            
+            if not transcriptions:
+                return {"error": "No transcription result"}
+            
+            result = transcriptions[0]
+            
+            # Handle different result formats
+            if isinstance(result, str):
+                full_text = result
+            elif hasattr(result, 'text'):
+                full_text = result.text
+            else:
+                full_text = str(result)
+            
+            elapsed = time.time() - start_time
+            
+            print(f"✓ Canary transcription complete in {elapsed:.1f}s ({len(full_text)} chars)")
+            
+            return {
+                "transcript": full_text.strip(),
+                "language": language or "en",
+                "language_probability": 1.0,
+                "duration": 0.0,  # Canary doesn't provide duration
+                "segments": [{"start": 0.0, "end": 0.0, "text": full_text.strip()}],
+                "processing_time": round(elapsed, 2),
+                "model": "canary-1b-flash"
+            }
+            
+        except Exception as e:
+            print(f"❌ Canary transcription error: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Try Whisper fallback if available
+            if self.whisper_model is not None:
+                print("   Falling back to Whisper...")
+                return self._transcribe_with_whisper(audio_path, language)
+            
+            return {"error": str(e)}
+    
+    def _transcribe_with_whisper(self, audio_path: str, language: str = None) -> Dict:
+        """Transcribe using Faster-Whisper (fallback)."""
+        import math
+        start_time = time.time()
+        
         lang = language or "en"
-
         print(f"🎧 Transcribing with Faster-Whisper: {audio_path} (lang={lang})")
-
+        
         def safe_float(val):
             try:
                 f = float(val)
@@ -1426,10 +1547,9 @@ class ModelManager:
             full_text = " ".join(texts).strip()
             elapsed = time.time() - start_time
 
-            # "Speech end time" (not total audio length)
             duration = formatted_segments[-1]["end"] if formatted_segments else 0.0
 
-            print(f"✓ Transcription complete in {elapsed:.1f}s ({len(full_text)} chars)")
+            print(f"✓ Whisper transcription complete in {elapsed:.1f}s ({len(full_text)} chars)")
 
             return {
                 "transcript": full_text,
@@ -1437,7 +1557,8 @@ class ModelManager:
                 "language_probability": round(float(getattr(info, "language_probability", 0.0)), 3),
                 "duration": duration,
                 "segments": formatted_segments,
-                "processing_time": round(elapsed, 2)
+                "processing_time": round(elapsed, 2),
+                "model": f"whisper-{config.whisper_model_size}"
             }
 
         except Exception as e:
@@ -1445,7 +1566,6 @@ class ModelManager:
             import traceback
             traceback.print_exc()
             return {"error": str(e)}
-
     
     def _build_messages(self, user_input: str, history: Optional[List[Dict]], 
                          system_prompt: str, use_thinking: bool) -> Tuple[List[Dict], bool]:
@@ -2307,11 +2427,11 @@ Format: <think>analysis</think> spoken answer."""
             print(f"   Model: {config.magpie_model_name}")
             
             self.magpie_tts = MagpieTTSModel.from_pretrained(config.magpie_model_name)
-            self.magpie_tts = self.magpie_tts.to(config.device_secondary)
+            self.magpie_tts = self.magpie_tts.to(config.device)  # GPU 0 - more VRAM headroom
             self.magpie_tts.eval()
             
             if torch.cuda.is_available():
-                vram_gb = torch.cuda.memory_allocated(1) / 1024**3
+                vram_gb = torch.cuda.memory_allocated(0) / 1024**3
                 print(f"   ✓ Magpie TTS loaded ({vram_gb:.2f} GB VRAM)")
             
             print(f"   ✓ Voices: John, Sofia, Aria, Jason, Leo")
@@ -2377,6 +2497,49 @@ Format: <think>analysis</think> spoken answer."""
         except Exception as e:
             print(f"❌ Magpie error: {e}")
             return self._synthesize_nemo(text)
+
+    def _synthesize_nemo(self, text: str) -> bytes:
+        """Fallback to NeMo FastPitch when Magpie fails."""
+        import numpy as np
+        import io
+    
+        if not self.tts_fastpitch or not self.tts_hifigan:
+            print("⚠️ NeMo TTS not available for fallback")
+            return b""
+    
+        try:
+            clean_text = clean_numbers_for_tts(text)
+            clean_text = TTS_CLEANUP_PATTERN.sub('', clean_text)
+            clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
+        
+            if not clean_text:
+                return b""
+        
+            start_time = time.time()
+        
+            with torch.no_grad():
+                parsed = self.tts_fastpitch.parse(clean_text[:500])  # Limit length
+                spectrogram = self.tts_fastpitch.generate_spectrogram(tokens=parsed)
+                audio = self.tts_hifigan.convert_spectrogram_to_audio(spec=spectrogram)
+        
+            audio_np = audio.squeeze().cpu().numpy()
+            audio_np = audio_np / (np.abs(audio_np).max() + 1e-7)
+        
+            buffer = io.BytesIO()
+            with wave.open(buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(config.tts_sample_rate)
+                wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
+        
+            elapsed = time.time() - start_time
+            print(f"🔊 NeMo Fallback TTS: {len(clean_text)} chars in {elapsed*1000:.0f}ms")
+        
+            return buffer.getvalue()
+        
+        except Exception as e:
+            print(f"❌ NeMo fallback also failed: {e}")
+            return b""
 
     def _load_xtts(self):
         """Load Coqui XTTS v2 for high-quality voice synthesis with voice cloning."""
@@ -3260,16 +3423,19 @@ Examples:
     }
     
     print("\n" + "="*70)
-    print("🚀 NEMOTRON VOICE AGENT ")
+    print("🚀 NEMOTRON VOICE AGENT - CONFIGURATION")
     print("="*70)
-    print(f"🧠 LLM Backend:      {backend_names.get(config.llm_backend_preference, config.llm_backend_preference)}")
+    print(f"🧠 LLM Preference:   {backend_names.get(config.llm_backend_preference, config.llm_backend_preference)}")
     if config.llm_backend_preference == "gguf":
-        print(f"   Model Path:       {config.gguf_model_path}")
+        print(f"   GGUF Path:        {config.gguf_model_path}")
         print(f"   Context Size:     {config.gguf_n_ctx}")
         print(f"   GPU Layers:       {config.gguf_n_gpu_layers} (-1 = all)")
-    print(f"🔊 TTS Engine:       {tts_names.get(config.tts_engine, config.tts_engine)}")
+    else:
+        print(f"   HF Model:         {config.llm_model_name}")
+    print(f"🔊 TTS Preference:   {tts_names.get(config.tts_engine, config.tts_engine)}")
     if config.tts_engine == "magpie":
         print(f"   Default Voice:    {config.magpie_default_speaker}")
+    print(f"🎧 Transcription:    {'Canary-1B-Flash (preferred)' if config.use_canary else f'Whisper {config.whisper_model_size}'}")
     print(f"🧠 Thinking Mode:    {'✅ ENABLED' if config.use_reasoning else '❌ DISABLED'}")
     print(f"📡 Streaming Mode:   ✅ ENABLED (/ws/voice/stream)")
     print(f"⚡ torch.compile:    {'✅ ENABLED' if config.use_torch_compile else '❌ DISABLED'}")
@@ -3282,6 +3448,9 @@ Examples:
     print("   • /ws/voice        - Standard (full response then TTS)")
     print("   • /ws/voice/stream - Streaming (token-by-token + sentence TTS)")
     print("   • /chat/speak      - REST API with audio response")
+    print("   • /transcribe      - File transcription (Canary/Whisper)")
+    print("="*70)
+    print("💡 NOTE: Actual loaded models shown after initialization completes")
     print("="*70)
     
     print(f"\n🌐 Starting server at http://{args.host}:{args.port}")
