@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nemotron AI - Offline</title>
+    <meta name="theme-color" content="#00ffcc">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0a0f14 0%, #0d1a25 100%);
+            color: #e0f0ff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .container {
+            max-width: 500px;
+            padding: 40px;
+            background: rgba(10, 20, 30, 0.8);
+            border: 1px solid rgba(0, 255, 204, 0.3);
+            border-radius: 16px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 24px;
+            opacity: 0.8;
+        }
+        
+        h1 {
+            font-size: 1.8rem;
+            color: #00ffcc;
+            margin-bottom: 16px;
+            text-shadow: 0 0 20px rgba(0, 255, 204, 0.4);
+        }
+        
+        p {
+            color: #8899aa;
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+        
+        .retry-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 28px;
+            background: #00ffcc;
+            color: #0a0f14;
+            border: none;
+            border-radius: 50px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .retry-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(0, 255, 204, 0.5);
+        }
+        
+        .status {
+            margin-top: 24px;
+            font-size: 0.85rem;
+            color: #556677;
+        }
+        
+        .pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <svg class="icon pulse" viewBox="0 0 24 24" fill="none" stroke="#00ffcc" stroke-width="1.5">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
+            <path d="M8 12l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"/>
+            <path d="M16 12a1 1 0 100-2 1 1 0 000 2z"/>
+            <path d="M8 17h8"/>
+        </svg>
+        
+        <h1>You're Offline</h1>
+        
+        <p>
+            Nemotron AI requires an internet connection to process your requests. 
+            Please check your connection and try again.
+        </p>
+        
+        <button class="retry-btn" onclick="location.reload()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6"/>
+                <path d="M1 20v-6h6"/>
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10"/>
+                <path d="M20.49 15a9 9 0 01-14.85 3.36L1 14"/>
+            </svg>
+            Retry Connection
+        </button>
+        
+        <p class="status">
+            Waiting for connection...
+        </p>
+    </div>
+    
+    <script>
+        // Auto-retry when back online
+        window.addEventListener('online', () => {
+            location.reload();
+        });
+        
+        // Check connection periodically
+        setInterval(() => {
+            if (navigator.onLine) {
+                location.reload();
+            }
+        }, 5000);
+    </script>
+</body>
+</html>

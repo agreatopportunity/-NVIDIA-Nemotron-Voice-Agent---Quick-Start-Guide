@@ -1,0 +1,30 @@
+# Nemotron AI - robots.txt
+# https://nemotron.burtoncummings.io
+
+User-agent: *
+Allow: /
+
+# Disallow API endpoints from being indexed
+Disallow: /api/
+Disallow: /ws/
+Disallow: /chat
+Disallow: /chat/speak
+Disallow: /transcribe
+Disallow: /transcribe/file
+Disallow: /synthesize
+Disallow: /search/
+Disallow: /health
+Disallow: /metrics
+Disallow: /clear
+Disallow: /settings/
+
+# Allow static assets
+Allow: /favicon.svg
+Allow: /manifest.json
+Allow: /og-image.png
+
+# Sitemap location
+Sitemap: https://nemotron.burtoncummings.io/sitemap.xml
+
+# Crawl delay (be nice to your server)
+Crawl-delay: 1
