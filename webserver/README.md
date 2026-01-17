@@ -304,27 +304,30 @@ ACADEMIA_API_KEY=your_academia_key
 All APIs are optional. The system runs fully offline without them.
 
 ## Customizations
-
-# EDIT NEMOTRON_WEB_SERVER.PY LINE 474
 ```
+# EDIT NEMOTRON_WEB_SERVER.PY LINE 474
+
 Local City, State Weather, Country & TimeZone 
     user_city: str = "Chicago"
     user_state: str = "Illinois"
     user_country: str = "US"
     user_timezone: str = "America/Chicago"
-```    
-# EDIT NEMOTRON_WEB_UI.HTML LINE 16,24,30,50,53 & 54
 ```
+```   
+# EDIT NEMOTRON_WEB_UI.HTML LINE 16,24,30,50,53 & 54
+
  Sitemap location & Author
 <meta property="og:site_name" content="NEMOTRON AI">
 ```
-# EDIT ROBOTS.TXT LINE 27
 ```
+# EDIT ROBOTS.TXT LINE 27
+
  Sitemap location
 Sitemap: https://YOUR-WEBSITE-HERE/sitemap.xml
 ```
-# EDIT SITEMAP.XML LINE 9 & 17 
 ```
+# EDIT SITEMAP.XML LINE 9 & 17 
+
  Sitemap location
 <loc>https://YOUR-WEBSITE-HERE/</loc>
 ```
