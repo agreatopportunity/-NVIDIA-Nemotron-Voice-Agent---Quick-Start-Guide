@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
 """
-Nemotron Voice Agent - OPTIMIZED Web API Server v3.1
+Nemotron Voice Agent - OPTIMIZED Web API Server
 =====================================================
-FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
-
-HARDWARE OPTIMIZED FOR:
-- GPU 0 (cuda:0): RTX 4060 Ti 16GB - Main models ( LLM's )
-- GPU 1 (cuda:1): TITAN V 12GB - Whisper file transcription (ASR, TTS, Vision)
-- Driver: 550.x (DO NOT UPGRADE - optimal for Volta + Ada mixed setup)
-- CUDA: 12.4
 
 Usage:
-    python nemotron_web_server_v31.py
-    python nemotron_web_server_v31.py --think    # Enable reasoning mode
-    python nemotron_web_server_v31.py --port 5050
+    python nemotron_web_server.py
+    python nemotron_web_server.py --think    # Enable reasoning mode
+    python nemotron_web_server.py --port 5050
 
 Environment Variables (.env file):
     OPENWEATHER_API_KEY=your_key_here
@@ -478,8 +471,8 @@ class ServerConfig:
     # ======================================================
     # User location
     # ======================================================
-    user_city: str = "Branson"
-    user_state: str = "Missouri"
+    user_city: str = "Chicago"
+    user_state: str = "Illinois"
     user_country: str = "US"
     user_timezone: str = "America/Chicago"
 
