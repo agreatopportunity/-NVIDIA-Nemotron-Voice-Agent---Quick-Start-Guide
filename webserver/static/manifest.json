@@ -1,0 +1,73 @@
+{
+  "name": "Nemotron AI Voice Assistant",
+  "short_name": "Nemotron AI",
+  "description": "High-performance, self-hosted AI voice assistant powered by NVIDIA Nemotron models",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0f14",
+  "theme_color": "#00ffcc",
+  "orientation": "any",
+  "scope": "/",
+  "lang": "en-US",
+  "categories": ["productivity", "utilities", "entertainment"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/desktop.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Nemotron AI Desktop View"
+    },
+    {
+      "src": "/screenshots/mobile.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Nemotron AI Mobile View"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Voice Chat",
+      "short_name": "Voice",
+      "description": "Start a voice conversation",
+      "url": "/?mode=voice",
+      "icons": [{"src": "/icon-voice.png", "sizes": "96x96"}]
+    },
+    {
+      "name": "Text Chat",
+      "short_name": "Text",
+      "description": "Start a text conversation",
+      "url": "/?mode=text",
+      "icons": [{"src": "/icon-text.png", "sizes": "96x96"}]
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false
+}
