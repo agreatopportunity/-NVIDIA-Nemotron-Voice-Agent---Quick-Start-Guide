@@ -1,7 +1,7 @@
 # Nemotron AI Voice Assistant - API Documentation
 
 > **Version:** 3.4  
-> **Base URL:** `http://localhost:5050` | `https://nemotron.burtoncummings.io`  
+> **Base URL:** `http://localhost:5050` | `https://YOUR-SITE-HERE`  
 > **Interactive Docs:** `http://localhost:5050/docs` (Swagger UI)  
 > **Last Updated:** January 2026
 
@@ -73,7 +73,7 @@ Nemotron AI is a full-featured voice assistant powered by NVIDIA's neural models
 
 ```bash
 # Clone/navigate to project
-cd ~/ai/speechAi
+cd ~/ai/nemotron
 
 # Install core dependencies
 pip install torch transformers fastapi uvicorn httpx python-dotenv pillow
@@ -103,7 +103,7 @@ ACADEMIA_API_KEY=your_academia_key
 EOF
 
 # Start server
-python nemotron_web_server_vllm.py --port 5050 --think
+python nemotron_web_server.py --port 5050 --think
 ```
 
 ### First Request
@@ -377,8 +377,8 @@ Get current weather data.
 ```json
 {
   "weather": "Clear sky, 72°F (22°C), Humidity: 45%, Wind: 5 mph",
-  "city": "Branson",
-  "state": "Missouri"
+  "city": "Chicago",
+  "state": "Illinois"
 }
 ```
 
