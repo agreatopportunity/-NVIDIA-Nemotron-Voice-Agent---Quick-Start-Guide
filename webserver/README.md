@@ -496,8 +496,7 @@ Response:
 
 ```
 speechAi/
-├── nemotron_web_server_vllm.py   # Main server (v3.4 with multi-backend)
-├── nemotron_web_server.py        # Legacy backup
+├── nemotron_web_server.py        # Main server
 ├── nemotron_web_ui.html          # Web UI (mobile responsive)
 ├── NemotronVoiceUI.jsx           # React UI component
 ├── sw.js                         # PWA service worker
@@ -511,6 +510,7 @@ speechAi/
 │   └── magpie-tts/
 │       └── magpie_tts_multilingual_357m.nemo
 └── static/
+    └── manifest.json
     ├── favicon.svg
     ├── og-image.png
     └── apple-touch-icon.png
