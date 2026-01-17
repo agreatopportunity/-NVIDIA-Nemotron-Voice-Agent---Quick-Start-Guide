@@ -359,6 +359,12 @@ python3 nemotron_web_server_vllm.py --list-models
 
 | Argument | Values | Description |
 |----------|--------|-------------|
+| `--host` | `0.0.0.0`| Host to bind to |
+| `--port` | `8000`| Port to bind to |
+| `--reload` | `off`| Enable/Disable auto-reload for development |
+| `--think` | `off`| Enable/Disable thinking/reasoning mode |
+| `--stream` | `off`| Enable/Disable streaming mode |
+| `--no-compile` | `off`| Disable torch.compile |
 | `--backend` | `gguf`, `vllm`, `hf` | Choose LLM backend |
 | `--gguf-model` | `path/to/model.gguf` | Path to GGUF file |
 | `--gguf-ctx` | `2048`, `4096`, `8192`, etc | Context window size |
@@ -367,6 +373,8 @@ python3 nemotron_web_server_vllm.py --list-models
 | `--voice` | `Sofia`, `John`, `Aria`, `Jason`, `Leo` | Magpie voice |
 | `--asr` | `canary`, `nemo` | ASR engine (default: canary) |
 | `--list-models` | - | List available GGUF files |
+
+
 
 ---
 
