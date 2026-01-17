@@ -24,7 +24,7 @@ Allow: /manifest.json
 Allow: /og-image.png
 
 # Sitemap location
-Sitemap: https://nemotron.burtoncummings.io/sitemap.xml
+Sitemap: https://YOUR-WEBSITE-HERE/sitemap.xml
 
 # Crawl delay (be nice to your server)
 Crawl-delay: 1
