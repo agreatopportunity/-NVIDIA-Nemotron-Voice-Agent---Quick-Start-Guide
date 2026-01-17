@@ -4,12 +4,6 @@ Nemotron Voice Agent - OPTIMIZED Web API Server v3.1
 =====================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
 
-HARDWARE OPTIMIZED FOR:
-- GPU 0 (cuda:0): RTX 4060 Ti 16GB - Main models ( LLM's )
-- GPU 1 (cuda:1): TITAN V 12GB - Whisper file transcription (ASR, TTS, Vision)
-- Driver: 550.x (DO NOT UPGRADE - optimal for Volta + Ada mixed setup)
-- CUDA: 12.4
-
 Usage:
     python nemotron_web_server_v31.py
     python nemotron_web_server_v31.py --think    # Enable reasoning mode
@@ -422,7 +416,7 @@ class ServerConfig:
     # ======================================================
     #llm_model_name: str = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
     #llm_model_name: str = "nvidia/Nemotron-Cascade-8B-Thinking"
-    llm_model_name: str = "/home/gw878/text-gen/user_data/models/Qwen_Qwen3-8B"
+    llm_model_name: str = "/LOCATION/WHERE_YOU_HAVE/Qwen_Qwen3-8B"
 
     # ======================================================
     # File Transcription Model
@@ -518,8 +512,8 @@ class ServerConfig:
     # ======================================================
     # User location
     # ======================================================
-    user_city: str = "Branson"
-    user_state: str = "Missouri"
+    user_city: str = "Chicago"
+    user_state: str = "Illinois"
     user_country: str = "US"
     user_timezone: str = "America/Chicago"
 
