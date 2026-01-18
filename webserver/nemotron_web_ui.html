@@ -8,26 +8,26 @@
     <title>NEMOTRON AI - Neural Voice Assistant | Self-Hosted AI Powered by NVIDIA</title>
     <meta name="description" content="NEMOTRON AI is a high-performance, self-hosted voice assistant powered by NVIDIA Nemotron models. Features real-time ASR with Canary-1B, multi-voice TTS with Magpie, vision understanding, and web search integration.">
     <meta name="keywords" content="NEMOTRON AI, voice assistant, NVIDIA, AI assistant, speech recognition, text to speech, Magpie TTS, Canary ASR, self-hosted AI, neural voice, LLM, machine learning">
-    <meta name="author" content="Burton Cummings">
+    <meta name="author" content="YOU_HERE">
     <meta name="robots" content="index, follow">
     
     <!-- Open Graph / Social Media -->
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://YOUR-SITE-HERE/">
+    <meta property="og:url" content="https://nemotron.burtoncummings.io/">
     <meta property="og:title" content="NEMOTRON AI - Neural Voice Assistant">
     <meta property="og:description" content="Self-hosted AI voice assistant powered by NVIDIA Nemotron. Real-time speech recognition, multi-voice TTS, vision understanding, and deep thinking mode.">
-    <meta property="og:image" content="https://YOUR-SITE-HERE/static/og-image.png">
+    <meta property="og:image" content="https://YOUR_WEBSITE_HERE/static/og-image.png">
     <meta property="og:site_name" content="NEMOTRON AI">
     
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:url" content="https://YOUR-SITE-HERE/">
+    <meta name="twitter:url" content="https://YOUR_WEBSITE_HERE/">
     <meta name="twitter:title" content="NEMOTRON AI - Neural Voice Assistant">
     <meta name="twitter:description" content="Self-hosted AI voice assistant powered by NVIDIA Nemotron models with Magpie TTS and Canary ASR.">
-    <meta name="twitter:image" content="https://nemotron.burtoncummings.io/static/twitter-card.png">
+    <meta name="twitter:image" content="https://YOUR_WEBSITE_HERE/static/twitter-card.png">
     
     <!-- Canonical URL -->
-    <link rel="canonical" href="https://YOUR-SITE-HERE/">
+    <link rel="canonical" href="https://YOUR_WEBSITE_HERE/">
     
     <!-- Favicon & Icons -->
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
@@ -47,11 +47,11 @@
         "applicationCategory": "AIApplication",
         "operatingSystem": "Linux, Web",
         "description": "High-performance, self-hosted AI voice assistant powered by NVIDIA Nemotron models featuring real-time ASR, multi-voice TTS, and vision understanding.",
-        "url": "https://YOUR-SITE-HERE/",
+        "url": "https://YOUR_WEBSITE_HERE/",
         "author": {
             "@type": "Person",
-            "name": "AUTHOR",
-            "url": "https://YOUR-SITE-HERE"
+            "name": "YOU_HERE",
+            "url": "YOUR_WEBSITE_HERE"
         },
         "offers": {
             "@type": "Offer",
@@ -591,6 +591,23 @@
         }
 
         .quick-btn:hover { background: rgba(0, 255, 200, 0.1); color: var(--primary); }
+        
+        .quick-btn.active, #youtube-btn.active {
+            background: var(--primary);
+            color: black;
+            border-color: var(--primary);
+        }
+        
+        #youtube-btn {
+            background: rgba(255, 0, 0, 0.1);
+            border-color: rgba(255, 0, 0, 0.3);
+            color: #ff6b6b;
+        }
+        
+        #youtube-btn:hover {
+            background: rgba(255, 0, 0, 0.2);
+            color: #ff4444;
+        }
 
         .footer {
             padding: 8px 10px;
@@ -814,6 +831,44 @@
             opacity: 0.9;
             font-weight: 600;
         }
+/* === TOAST NOTIFICATIONS === */
+#toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 9999;
+}
+
+.toast {
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    padding: 12px 24px;
+    border-radius: 8px;
+    margin-top: 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    font-family: 'Segoe UI', sans-serif;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    
+    /* Animation */
+    animation: slideIn 0.3s ease-out forwards;
+    opacity: 0;
+    transform: translateX(100%);
+}
+
+.toast.success { border-left: 4px solid #4CAF50; }
+.toast.info    { border-left: 4px solid #2196F3; }
+.toast.warning { border-left: 4px solid #FFC107; }
+
+@keyframes slideIn {
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fadeOut {
+    to { opacity: 0; transform: translateX(20px); }
+}
     </style>
     <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.19/dist/bundle.min.js"></script>
 </head>
@@ -833,7 +888,7 @@
             
             <nav class="mode-toggle" aria-label="Interface mode">
                 <button class="mode-btn active" data-mode="text" onclick="setMode('text')">⌨️ Text</button>
-                <button class="mode-btn" data-mode="voice" onclick="setMode('voice')">🎤 Voice</button>
+                <button class="mode-btn" data-mode="voice" onclick="setMode('voice'); unlockYouTubePlayback()">🎤 Voice</button>
                 <button class="mode-btn" data-mode="transcribe" onclick="setMode('transcribe')">🎧 Transcribe</button>
             </nav>
 
@@ -883,6 +938,28 @@
             </div>
         </header>
 
+	<div id="player-container" style="margin-top: 10px; text-align: center; display: none; padding: 10px; background: rgba(0, 0, 0, 0.5); border-radius: 12px; margin: 10px 15px; border: 1px solid rgba(255, 0, 0, 0.2);">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px;">
+                <span style="color: #ff4444; font-size: 12px;">📺</span>
+                <span style="color: rgba(255, 255, 255, 0.7); font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">YouTube Player</span>
+            </div>
+            <!-- Search/URL Input -->
+            <div style="margin-bottom: 10px; display: flex; gap: 6px; justify-content: center;">
+                <input type="text" id="yt-search-input" placeholder="Video ID, URL, or search..." style="padding: 6px 10px; width: 200px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: white; font-size: 11px;" onkeypress="if(event.key==='Enter')ytManualPlay()">
+                <button onclick="ytManualPlay()" style="padding: 6px 12px; background: #ff4444; border: none; border-radius: 6px; color: white; cursor: pointer; font-size: 11px;">▶️ Play</button>
+            </div>
+    	    <div id="youtube-player" style="width: 320px; height: 180px; margin: 0 auto; border-radius: 8px; border: 1px solid rgba(255, 68, 68, 0.3); overflow: hidden;"></div>
+            <div style="margin-top: 8px; display: flex; justify-content: center; gap: 6px; flex-wrap: wrap;">
+                <button onclick="if(player)player.previousVideo()" style="padding: 5px 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: white; cursor: pointer; font-size: 11px;" title="Previous Video">⏮️</button>
+                <button onclick="if(player&&player.getCurrentTime&&player.seekTo)player.seekTo(Math.max(0,player.getCurrentTime()-10),true)" style="padding: 5px 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: white; cursor: pointer; font-size: 11px;" title="Rewind 10s">⏪</button>
+                <button onclick="if(player)player.pauseVideo()" style="padding: 5px 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: white; cursor: pointer; font-size: 11px;" title="Pause">⏸️</button>
+                <button onclick="if(player)player.playVideo()" style="padding: 5px 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: white; cursor: pointer; font-size: 11px;" title="Play">▶️</button>
+                <button onclick="if(player&&player.getCurrentTime&&player.seekTo)player.seekTo(player.getCurrentTime()+10,true)" style="padding: 5px 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: white; cursor: pointer; font-size: 11px;" title="Forward 10s">⏩</button>
+                <button onclick="if(player)player.nextVideo()" style="padding: 5px 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: white; cursor: pointer; font-size: 11px;" title="Next Video">⏭️</button>
+                <button onclick="if(player)player.stopVideo()" style="padding: 5px 8px; background: rgba(255,100,100,0.2); border: 1px solid rgba(255,100,100,0.3); border-radius: 6px; color: #ff6b6b; cursor: pointer; font-size: 11px;" title="Stop">⏹️</button>
+            </div>
+	</div>
+
         <div class="messages-container" id="messages-container" role="log" aria-live="polite">
             <article class="message assistant">
                 <div class="message-bubble">
@@ -903,7 +980,7 @@
                 <button class="quick-btn" id="push-to-talk-btn" onclick="setVoiceMode('push')" style="background: var(--primary); color: black;">Push to Talk</button>
                 <button class="quick-btn" id="continuous-btn" onclick="setVoiceMode('continuous')">🎙️ Conversation</button>
             </div>
-            <button class="record-btn" id="record-btn" onclick="toggleRecording()">● Record</button>
+            <button class="record-btn" id="record-btn" onclick="toggleRecording(); unlockYouTubePlayback()">● Record</button>
             <div id="live-transcript" style="margin-top: 12px; padding: 8px; background: rgba(0,255,200,0.1); border-radius: 6px; min-height: 25px; font-style: italic; color: var(--primary); display: none; font-size: 13px;"></div>
         </div>
 
@@ -994,6 +1071,7 @@
                 <button class="quick-btn" onclick="manualSearch('britannica')">📖 Britannica</button>
                 <button class="quick-btn" onclick="manualSearch('academia')">🎓 Academia</button>
                 <button class="quick-btn" onclick="manualWebSearch()">🌐 Search Web</button>
+                <button class="quick-btn" id="youtube-btn" onclick="toggleYoutubePlayer()">📺 YouTube</button>
                 <button class="quick-btn" onclick="clearChat()">🗑️ Clear</button>
             </div>
         </div>
@@ -1214,6 +1292,16 @@
                 hideTypingIndicator();
                 if (response.ok) {
                     const data = await response.json();
+                    
+                    // Handle YouTube commands
+                    if (data.command && data.command.target === 'youtube') {
+                        showYoutubePlayer();
+                        handleYoutubeCommand(data.command);
+                        showToast(data.response, 'success');
+                    } else if (data.command && data.command.target === 'system') {
+                        handleYoutubeCommand(data.command);
+                    }
+                    
                     addMessage(data.response, false, data.audio_base64, data.thinking, data.timing);
                     if (data.audio_base64 && ttsEnabled) setTimeout(() => document.querySelector('.message:last-child .audio-play-btn')?.click(), 100);
                 } else { addMessage('Sorry, I encountered an error.', false); }
@@ -1288,6 +1376,29 @@
             fetch(`${API_BASE}/clear`, { method: 'POST' });
         }
 
+        // YouTube Player Toggle
+        var youtubePlayerVisible = false;
+        
+        function toggleYoutubePlayer() {
+            const container = document.getElementById('player-container');
+            const btn = document.getElementById('youtube-btn');
+            youtubePlayerVisible = !youtubePlayerVisible;
+            container.style.display = youtubePlayerVisible ? 'block' : 'none';
+            btn.style.background = youtubePlayerVisible ? 'var(--primary)' : 'transparent';
+            btn.style.color = youtubePlayerVisible ? 'black' : 'var(--text-dim)';
+            
+            // Unlock YouTube on first show (requires user interaction)
+            if (youtubePlayerVisible && !ytUnlocked) {
+                unlockYouTubePlayback();
+            }
+        }
+        
+        function showYoutubePlayer() {
+            if (!youtubePlayerVisible) {
+                toggleYoutubePlayer();
+            }
+        }
+
         // Voice Recording
         function setVoiceMode(mode) {
             voiceMode = mode;
@@ -1332,6 +1443,15 @@
                 });
                 if (!chatResponse.ok) throw new Error('Chat failed');
                 const chatData = await chatResponse.json();
+
+                // Handle YouTube commands from voice input
+                if (chatData.command && chatData.command.target === 'youtube') {
+                    showYoutubePlayer();
+                    handleYoutubeCommand(chatData.command);
+                    showToast(chatData.response, 'success');
+                } else if (chatData.command && chatData.command.target === 'system') {
+                    handleYoutubeCommand(chatData.command);
+                }
 
                 if (chatData.audio_base64) {
                     updateVoiceUI('speaking');
@@ -1484,6 +1604,285 @@
                 });
             }
         });
+
+
+// ============================================================================
+// YOUTUBE PLAYER & TOAST CONTROLLER
+//  ============================================================================
+
+var player;
+var isPlayerReady = false;
+var pendingCommands = []; 
+var ytUnlocked = false;
+var lastVolume = localStorage.getItem('ytLastVolume') || 70;
+
+// --- 1. Load YouTube API ---
+var tag = document.createElement('script');
+tag.src = "https://www.youtube.com/iframe_api";
+var firstScriptTag = document.getElementsByTagName('script')[0];
+firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+// --- 2. Initialize Player ---
+function onYouTubeIframeAPIReady() {
+    player = new YT.Player('youtube-player', {
+        height: '180',
+        width: '320',
+        videoId: '',
+        playerVars: {
+            'playsinline': 1,
+            'controls': 1, // Visible controls are a good fallback
+            'autoplay': 1,
+            'enablejsapi': 1
+        },
+        events: {
+            'onReady': onPlayerReady,
+            'onError': onPlayerError
+        }
+    });
+}
+
+// --- 3. Event Handlers ---
+function onPlayerReady(event) {
+    console.log("✅ YouTube Player Ready");
+    isPlayerReady = true;
+    showToast('YouTube Player Ready', 'success');
+
+    if (player.setVolume) {
+        player.setVolume(parseInt(lastVolume));
+    }
+
+    if (pendingCommands.length > 0) {
+        showToast(`Processing ${pendingCommands.length} queued commands...`, 'info');
+        pendingCommands.forEach(cmd => executeYoutubeCommand(cmd));
+        pendingCommands = [];
+    }
+}
+
+function onPlayerError(event) {
+    console.error("YouTube Error:", event.data);
+    showToast("YouTube Player Error", "warning");
+}
+
+// --- 4. Command Router ---
+function handleYoutubeCommand(cmd) {
+    // Special internal commands (like "speak" from "what's playing")
+    if (cmd.target === "system" && cmd.action === "speak") {
+        // The server already sent the audio for this description, 
+        // so we just show a toast for visual confirmation.
+        showToast(cmd.description, "info");
+        return;
+    }
+
+    if (cmd.target !== "youtube") return;
+
+    if (!isPlayerReady) {
+        console.warn("⚠️ Player not ready. Queuing:", cmd.action);
+        pendingCommands.push(cmd);
+        showToast("Player loading... command queued.", "warning");
+        return;
+    }
+
+    executeYoutubeCommand(cmd);
+}
+
+// --- 5. Execution Logic ---
+function executeYoutubeCommand(cmd) {
+    console.log(`▶️ YouTube: ${cmd.action}${cmd.query ? ` "${cmd.query}"` : ''}`);
+
+    // Unlock Warning (If user hasn't clicked Start/Connect yet)
+    if (!ytUnlocked && (cmd.action === "search" || cmd.action === "resume" || cmd.action === "play_video")) {
+        showToast("Click the YouTube button first to enable playback.", "warning");
+    }
+
+    switch (cmd.action) {
+        case "play_video":
+            // Direct video ID playback
+            if (cmd.video_id) {
+                showToast(`Playing video...`, 'success');
+                player.loadVideoById(cmd.video_id);
+            }
+            break;
+            
+        case "search":
+            if (cmd.query) {
+                showToast(`Searching: ${cmd.query}`, 'success');
+                
+                // Method 1: Try loadPlaylist (may not work due to API restrictions)
+                try {
+                    player.loadPlaylist({
+                        listType: "search",
+                        list: cmd.query,
+                        index: 0,
+                        startSeconds: 0
+                    });
+                } catch(e) {
+                    console.warn("loadPlaylist failed:", e);
+                }
+                
+                // Check if it worked after a delay, fallback to opening YouTube
+                setTimeout(() => {
+                    const playlist = player.getPlaylist ? player.getPlaylist() : null;
+                    const state = player.getPlayerState ? player.getPlayerState() : -1;
+                    
+                    console.log(`YouTube state: ${state}, playlist:`, playlist);
+                    
+                    if (!playlist || playlist.length === 0 || state === -1 || state === 5) {
+                        // Fallback: Open YouTube search in new tab
+                        showToast("Opening YouTube search...", "info");
+                        const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(cmd.query)}`;
+                        window.open(searchUrl, '_blank');
+                    } else {
+                        player.playVideo();
+                    }
+                }, 2000);
+            }
+            break;
+
+        case "stop":
+            showToast("Stopping Playback", "info");
+            player.stopVideo();
+            break;
+
+        case "pause":
+            player.pauseVideo();
+            showToast("Paused", "info");
+            break;
+            
+        case "resume":
+            player.playVideo();
+            showToast("Resuming", "info");
+            break;
+            
+        case "volume_up":
+            if (player.getVolume) {
+                let vol = Math.min(100, player.getVolume() + 15);
+                player.setVolume(vol);
+                localStorage.setItem('ytLastVolume', vol);
+                showToast(`Volume: ${vol}%`, "info");
+            }
+            break;
+            
+        case "volume_down":
+             if (player.getVolume) {
+                let vol = Math.max(0, player.getVolume() - 15);
+                player.setVolume(vol);
+                localStorage.setItem('ytLastVolume', vol); // Save
+                showToast(`Volume: ${vol}%`, "info");
+             }
+            break;
+            
+        case "skip":
+            // Safety Check: Is there anything to skip?
+            if (player.getPlaylist && (player.getPlaylist() || []).length > 0) {
+                showToast("Skipping...", "info");
+                player.nextVideo();
+            } else {
+                showToast("Nothing to skip. Play something first.", "warning");
+            }
+            break;
+
+        case "previous":
+            // Previous functionality
+            if (player.getPlaylist && (player.getPlaylist() || []).length > 0) {
+                showToast("Going back...", "info");
+                try { player.previousVideo(); } catch(e) {}
+            }
+            break;
+            
+        case "forward":
+            // Fast forward / seek ahead
+            if (player.getCurrentTime && player.seekTo) {
+                const currentTime = player.getCurrentTime();
+                const seekSeconds = cmd.seconds || 10;
+                player.seekTo(currentTime + seekSeconds, true);
+                showToast(`Forward ${seekSeconds}s`, "info");
+            }
+            break;
+            
+        case "rewind":
+            // Rewind / seek back
+            if (player.getCurrentTime && player.seekTo) {
+                const currentTime = player.getCurrentTime();
+                const seekSeconds = cmd.seconds || 10;
+                player.seekTo(Math.max(0, currentTime - seekSeconds), true);
+                showToast(`Rewind ${seekSeconds}s`, "info");
+            }
+            break;
+    }
+}
+
+// --- 6. Toast Notification Helper ---
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return; // Guard clause
+    
+    const toast = document.createElement('div');
+    
+    let icon = 'ℹ️';
+    if (type === 'success') icon = '✅';
+    if (type === 'warning') icon = '⚠️';
+    
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `<span>${icon}</span> <span>${message}</span>`;
+    
+    container.appendChild(toast);
+    
+    // Animation out
+    setTimeout(() => {
+        toast.style.animation = 'fadeOut 0.3s ease-in forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// Manual YouTube Play - handles video IDs, URLs, and search queries
+function ytManualPlay() {
+    const input = document.getElementById('yt-search-input');
+    const value = input.value.trim();
+    if (!value) return;
+    
+    // Check if it's a YouTube URL
+    const urlMatch = value.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/i);
+    
+    // Check if it's a direct video ID (11 characters, alphanumeric with - and _)
+    const isVideoId = /^[a-zA-Z0-9_-]{11}$/.test(value);
+    
+    if (urlMatch) {
+        // Extract video ID from URL
+        const videoId = urlMatch[1];
+        showToast(`Playing video: ${videoId}`, 'success');
+        player.loadVideoById(videoId);
+    } else if (isVideoId) {
+        // Direct video ID
+        showToast(`Playing video: ${value}`, 'success');
+        player.loadVideoById(value);
+    } else {
+        // Search query - open YouTube search in new tab (most reliable)
+        showToast(`Searching YouTube for: ${value}`, 'info');
+        const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(value)}`;
+        window.open(searchUrl, '_blank');
+    }
+    
+    input.value = '';
+}
+
+function unlockYouTubePlayback() {
+    if (!player || ytUnlocked) return;
+    try {
+        console.log("🔓 Unlocking YouTube Audio...");
+        player.mute();
+        player.playVideo(); 
+        setTimeout(() => {
+            player.pauseVideo();
+            player.unMute();
+            if (player.seekTo) player.seekTo(0);
+            ytUnlocked = true; 
+            console.log("🔓 YouTube Unlocked!");
+        }, 500);
+    } catch (e) {
+        console.warn("Unlock failed:", e);
+    }
+}
     </script>
+<div id="toast-container"></div>
 </body>
 </html>
