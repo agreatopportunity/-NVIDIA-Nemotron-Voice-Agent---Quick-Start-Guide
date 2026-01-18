@@ -1,5 +1,5 @@
 # Nemotron AI - robots.txt
-# https://nemotron.burtoncummings.io
+# https://YOUR-WEBSITE-HERE
 
 User-agent: *
 Allow: /
