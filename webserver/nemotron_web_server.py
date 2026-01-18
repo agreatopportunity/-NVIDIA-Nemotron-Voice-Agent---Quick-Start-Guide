@@ -4,10 +4,16 @@ Nemotron Voice Agent - OPTIMIZED Web API Server v3.1
 =====================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
 
+HARDWARE OPTIMIZED FOR:
+- GPU 0 (cuda:0): RTX 4060 Ti 16GB - Main models ( LLM's )
+- GPU 1 (cuda:1): TITAN V 12GB - Whisper file transcription (ASR, TTS, Vision)
+- Driver: 550.x (DO NOT UPGRADE - optimal for Volta + Ada mixed setup)
+- CUDA: 12.4
+
 Usage:
-    python nemotron_web_server_v31.py
-    python nemotron_web_server_v31.py --think    # Enable reasoning mode
-    python nemotron_web_server_v31.py --port 5050
+    python nemotron_web_server.py
+    python nemotron_web_server.py --think    # Enable reasoning mode
+    python nemotron_web_server.py --port 5050
 
 Environment Variables (.env file):
     OPENWEATHER_API_KEY=your_key_here
@@ -396,6 +402,194 @@ WEATHER_PATTERNS = [
 TRAILING_TIME_PATTERN = re.compile(r'\s*(?:today|tomorrow|now|right\s+now|currently)\s*$', re.IGNORECASE)
 
 # ============================================================================
+# YOUTUBE COMMAND PATTERNS
+# ============================================================================
+LAST_YOUTUBE_QUERY = None
+
+# YouTube URL patterns to extract video IDs
+YT_URL_PATTERN = re.compile(
+    r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([a-zA-Z0-9_-]{11})',
+    re.IGNORECASE
+)
+
+YT_PLAY_PATTERN = re.compile(
+    r"(?:play|listen to|watch)\s+"
+    r"(?!dead|the trumpet|this space|reason|it safe|along|"
+    r"  possum|dumb|fair|hard to get|devil.*advocate)" 
+    r"(.+?)(?:\s+on\s+(?:youtube|spotify|music))?$",
+    re.IGNORECASE
+)
+
+# 2. Strict Stop Pattern
+YT_STOP_PATTERN = re.compile(
+    r"(?:stop|clear|cancel|kill|end)\s*(?:youtube|music|video|queue|playlist|player|playback)?\b", 
+    re.IGNORECASE
+)
+
+# 3. Pause Pattern (NEW)
+YT_PAUSE_PATTERN = re.compile(
+    r"(?:pause|hold|freeze)\s*(?:youtube|music|video|song|track|playback|that|this|it)?\b",
+    re.IGNORECASE
+)
+
+# 4. Resume Pattern
+YT_RESUME_PATTERN = re.compile(
+    r"(?:resume|continue|unpause|play again)\s*(?:youtube|music|video|song|track|playback)?\b",
+    re.IGNORECASE
+)
+
+# 5. Skip (Next) Pattern
+YT_SKIP_PATTERN = re.compile(
+    r"(?:skip|next)\s*(?:song|track|video|youtube|this one)?\s*(?:please)?$",
+    re.IGNORECASE
+)
+
+# 6. Previous (Back) Pattern
+YT_PREV_PATTERN = re.compile(
+    r"(?:previous|back|last|prev|go back)\s*(?:song|track|video)?\b", 
+    re.IGNORECASE
+)
+
+# 7. Volume Controls
+YT_VOL_UP_PATTERN = re.compile(r"volume\s+(?:up|louder|increase)", re.IGNORECASE)
+YT_VOL_DOWN_PATTERN = re.compile(r"volume\s+(?:down|lower|decrease)", re.IGNORECASE)
+
+# 8. Seek Controls (NEW)
+YT_FORWARD_PATTERN = re.compile(
+    r"(?:fast\s*forward|forward|skip ahead|jump ahead|seek forward|ahead)\s*(\d+)?\s*(?:seconds?|secs?|s)?",
+    re.IGNORECASE
+)
+YT_REWIND_PATTERN = re.compile(
+    r"(?:rewind|go back|skip back|jump back|seek back|back)\s*(\d+)?\s*(?:seconds?|secs?|s)?",
+    re.IGNORECASE
+)
+
+# 9. Pronoun Guard
+YT_PRONOUNS = {"it", "that", "this", "the song", "the video", "music"}
+
+
+# ============================================================================
+# YOUTUBE COMMAND
+# ============================================================================
+
+def process_youtube_command(text: str, last_query: Optional[str] = None) -> Tuple[Optional[Dict], Optional[str]]:
+    """
+    Returns: (CommandDict, NewLastQuery)
+    """
+    if not text: return None, last_query
+    text_lower = text.strip().lower()
+
+    # 0. Check for YouTube URL first (highest priority)
+    url_match = YT_URL_PATTERN.search(text)
+    if url_match:
+        video_id = url_match.group(1)
+        print(f"🎬 YouTube URL detected, video ID: {video_id}")
+        return {
+            "type": "command",
+            "target": "youtube",
+            "action": "play_video",
+            "video_id": video_id,
+            "description": f"Playing video."
+        }, video_id
+
+    # 1. Stop/Clear
+    if YT_STOP_PATTERN.search(text):
+        return {"type": "command", "target": "youtube", "action": "stop", "description": "Stopping playback."}, None
+
+    # 2. Pause (check before resume to avoid conflicts)
+    if YT_PAUSE_PATTERN.search(text) and not YT_RESUME_PATTERN.search(text):
+        return {"type": "command", "target": "youtube", "action": "pause", "description": "Paused."}, last_query
+
+    # 3. Controls (Volume, Resume, Skip, Previous)
+    if YT_VOL_UP_PATTERN.search(text):
+        return {"type": "command", "target": "youtube", "action": "volume_up", "description": "Volume up."}, last_query
+    
+    if YT_VOL_DOWN_PATTERN.search(text):
+        return {"type": "command", "target": "youtube", "action": "volume_down", "description": "Volume down."}, last_query
+        
+    if YT_RESUME_PATTERN.search(text):
+        return {"type": "command", "target": "youtube", "action": "resume", "description": "Resuming."}, last_query
+        
+    if YT_SKIP_PATTERN.search(text):
+        return {"type": "command", "target": "youtube", "action": "skip", "description": "Skipping."}, last_query
+
+    if YT_PREV_PATTERN.search(text):
+        return {"type": "command", "target": "youtube", "action": "previous", "description": "Going back."}, last_query
+
+    # 4. Seek Forward
+    forward_match = YT_FORWARD_PATTERN.search(text)
+    if forward_match:
+        seconds = int(forward_match.group(1)) if forward_match.group(1) else 10
+        return {"type": "command", "target": "youtube", "action": "forward", "seconds": seconds, "description": f"Skipping ahead {seconds} seconds."}, last_query
+
+    # 5. Seek Backward (Rewind)
+    rewind_match = YT_REWIND_PATTERN.search(text)
+    if rewind_match and "go back" not in text_lower.replace("go back", ""):  # Avoid conflict with previous track
+        # Make sure it's not "go back to previous" which should trigger previous track
+        if "previous" not in text_lower and "song" not in text_lower and "track" not in text_lower:
+            seconds = int(rewind_match.group(1)) if rewind_match.group(1) else 10
+            return {"type": "command", "target": "youtube", "action": "rewind", "seconds": seconds, "description": f"Rewinding {seconds} seconds."}, last_query
+
+    # 6. Play / Search Intent
+    match = YT_PLAY_PATTERN.search(text)
+    if match:
+        query = match.group(1).strip()
+        query_lower = query.lower()
+        
+        # Check if the query itself contains a YouTube URL
+        url_in_query = YT_URL_PATTERN.search(query)
+        if url_in_query:
+            video_id = url_in_query.group(1)
+            print(f"🎬 YouTube URL in query, video ID: {video_id}")
+            return {
+                "type": "command",
+                "target": "youtube",
+                "action": "play_video",
+                "video_id": video_id,
+                "description": f"Playing video."
+            }, video_id
+        
+        # A. Pronoun Guard: "Play it" -> Resume
+        if query_lower in YT_PRONOUNS:
+            return {"type": "command", "target": "youtube", "action": "resume", "description": "Resuming."}, last_query
+
+        # B. Ambiguity Filters
+        if query_lower.startswith("how to") or "tutorial" in query_lower:
+            return None, last_query
+            
+        if len(query) < 3 or query_lower in ["a game", "the role", "dumb", "fair"]:
+            return None, last_query
+        
+        # OPTIONAL STRICT MODE: Uncomment the next 2 lines to require "youtube" in the sentence
+        # if "youtube" not in text_lower and "on youtube" not in text_lower:
+        #    return None, last_query
+
+        # C. Valid Search - TTS Truncation
+        tts_query = query
+        if len(tts_query) > 50:
+            tts_query = tts_query[:45] + "..."
+            
+        return {
+            "type": "command", 
+            "target": "youtube", 
+            "action": "search",
+            "query": query, 
+            "description": f"Searching for {tts_query}."
+        }, query
+
+    # 4. "What is playing?" Check
+    if "what" in text_lower and ("playing" in text_lower or "song" in text_lower):
+        if last_query:
+            return {
+                "type": "command", 
+                "target": "system", 
+                "action": "speak", 
+                "description": f"You are listening to {last_query}."
+            }, last_query
+            
+    return None, last_query
+
+# ============================================================================
 # Configuration
 # ============================================================================
 
@@ -412,11 +606,16 @@ class ServerConfig:
     # ======================================================
     asr_model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b"
     # ======================================================
-    # Regular Model
+    # Vllm Model
     # ======================================================
-    #llm_model_name: str = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
-    #llm_model_name: str = "nvidia/Nemotron-Cascade-8B-Thinking"
-    llm_model_name: str = "/LOCATION/WHERE_YOU_HAVE/Qwen_Qwen3-8B"
+    llm_model_name: str = "nvidia/Nemotron-Mini-4B-Instruct"
+    #llm_model_name: str = "Qwen/Qwen3-8B-AWQ"
+    #llm_model_name: str = "Qwen/Qwen3-8B-GPTQ"
+    #llm_model_name: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    #llm_model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-3B"
+    #llm_model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+    #llm_model_name: str = "casperhansen/DeepSeek-R1-Distill-Qwen-7B-awq"
+    #llm_model_name: str = "microsoft/Phi-3.5-mini-instruct"
 
     # ======================================================
     # File Transcription Model
@@ -482,11 +681,11 @@ class ServerConfig:
     # ======================================================
     use_vllm: bool = True
     vllm_dtype: str = "float16"  # "float16" or "bfloat16"
-    vllm_max_model_len: int = 4096
-    vllm_gpu_memory_utilization: float = 0.60
+    vllm_max_model_len: int = 2048  # From 4096 – halves KV reservation; still ample for chat
+    vllm_gpu_memory_utilization: float = 0.95 # 0.60 prior settings
     vllm_tensor_parallel_size: int = 1
     vllm_enforce_eager: bool = False
-    vllm_max_num_seqs: int = 8
+    vllm_max_num_seqs: int = 4  # From 8 – lowers batch overhead
     vllm_disable_log_stats: bool = True
 
     # ======================================================
@@ -1006,6 +1205,7 @@ class ChatResponse(BaseModel):
     audio_base64: Optional[str] = None
     image_description: Optional[str] = None
     timing: Optional[Dict[str, float]] = None
+    command: Optional[Dict[str, str]] = None  # YouTube/system commands
 
 class WeatherResponse(BaseModel):
     weather: str
@@ -2909,6 +3109,21 @@ async def chat(request: ChatRequest):
     total_start = time.time()
     timings = {}
     
+    # === CHECK FOR YOUTUBE COMMANDS FIRST ===
+    command_payload, _ = process_youtube_command(request.message, None)
+    if command_payload:
+        print(f"🎵 YouTube Command detected in /chat: {command_payload.get('action')}")
+        timings["total"] = time.time() - total_start
+        return ChatResponse(
+            response=command_payload.get("description", "Done."),
+            thinking=None,
+            audio_base64=None,
+            image_description=None,
+            timing=timings,
+            command=command_payload
+        )
+    # === END YOUTUBE COMMAND CHECK ===
+    
     # Image analysis
     image_description = None
     if request.image_data:
@@ -2995,6 +3210,29 @@ async def chat_speak(request: ChatRequest):
     
     total_start = time.time()
     timings = {}
+    
+    # === CHECK FOR YOUTUBE COMMANDS FIRST ===
+    command_payload, _ = process_youtube_command(request.message, None)
+    if command_payload:
+        print(f"🎵 YouTube Command detected: {command_payload.get('action')}")
+        tts_text = command_payload.get("description", "Done.")
+        
+        # Synthesize voice confirmation
+        tts_start = time.time()
+        audio_bytes = models.synthesize(tts_text, speaker_id=request.voice)
+        audio_base64 = base64.b64encode(audio_bytes).decode() if audio_bytes else None
+        timings["tts"] = time.time() - tts_start
+        timings["total"] = time.time() - total_start
+        
+        return ChatResponse(
+            response=tts_text,
+            thinking=None,
+            audio_base64=audio_base64,
+            image_description=None,
+            timing=timings,
+            command=command_payload
+        )
+    # === END YOUTUBE COMMAND CHECK ===
     
     chat_response = await chat(request)
     timings.update(chat_response.timing or {})
@@ -3322,19 +3560,7 @@ async def voice_websocket(websocket: WebSocket):
 @app.websocket("/ws/voice/stream")
 async def voice_stream_websocket(websocket: WebSocket):
     """
-    WebSocket with STREAMING responses.
-    
-    This endpoint streams tokens as they are generated, allowing:
-    1. Lower perceived latency (first words arrive faster)
-    2. Sentence-by-sentence TTS synthesis
-    3. Progressive UI updates
-    
-    Message flow:
-    1. Client sends audio bytes
-    2. Server transcribes (ASR)
-    3. Server streams LLM tokens
-    4. Server sends audio for each complete sentence
-    5. Server sends final complete response
+    WebSocket with STREAMING responses + YOUTUBE COMMANDS.
     """
     await websocket.accept()
     
@@ -3344,6 +3570,8 @@ async def voice_stream_websocket(websocket: WebSocket):
         return
     
     print("🔄 Streaming WebSocket connected")
+    
+    last_youtube_query = None
     
     try:
         while True:
@@ -3367,8 +3595,49 @@ async def voice_stream_websocket(websocket: WebSocket):
                 "transcript": transcript,
                 "timing": {"asr": round(asr_time, 3)}
             })
+
+            # === INTERCEPT YOUTUBE COMMANDS ===
+            # We pass the current state (last_youtube_query) and get a new one back
+            command_payload, new_query_state = process_youtube_command(transcript, last_youtube_query)
             
-            # 2. CONTEXT FETCHING
+            # Update state if it changed
+            if new_query_state is not None:
+                last_youtube_query = new_query_state
+                
+            if command_payload:
+                print(f"🎵 Command: {command_payload.get('description')}")
+                
+                # A. Send command to Frontend
+                await websocket.send_json({
+                    "status": "command",
+                    "command": command_payload
+                })
+                
+                # B. Synthesize Voice Confirmation
+                tts_text = normalize_for_tts(command_payload.get("description", "Done."))
+                audio_bytes = models.synthesize_sentence(tts_text)
+                
+                if audio_bytes:
+                    audio_base64 = base64.b64encode(audio_bytes).decode()
+                    await websocket.send_json({
+                        "status": "sentence_audio",
+                        "sentence_number": 1,
+                        "sentence": tts_text,
+                        "audio_base64": audio_base64
+                    })
+                
+                # C. Finish this turn (Skip LLM generation)
+                await websocket.send_json({
+                    "status": "complete",
+                    "transcript": transcript,
+                    "response": tts_text,
+                    "sentences_streamed": 1,
+                    "timing": {"asr": round(asr_time, 3), "total": round(time.time() - total_start, 3)}
+                })
+                continue
+            # === END COMMAND INTERCEPTION ===
+            
+            # 2. CONTEXT FETCHING (Standard Flow)
             weather_data = ""
             datetime_info = ""
             
@@ -3382,9 +3651,18 @@ async def voice_stream_websocket(websocket: WebSocket):
             if should_fetch_datetime(transcript):
                 datetime_info = get_current_datetime_info()
             
-            system_prompt = build_system_prompt(weather_data, datetime_info, has_search=bool(search_results))
-            #system_prompt = build_system_prompt(weather_data, datetime_info)
+            # Re-check search triggers
+            do_search = should_web_search(transcript)
+            search_results = ""
+            if do_search:
+                 search_results = await perform_google_search(transcript)
+
+            system_prompt = build_system_prompt(weather_data, datetime_info, web_search_results=search_results, has_search=bool(search_results))
             
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+
             # 3. STREAMING GENERATION
             await websocket.send_json({"status": "streaming"})
             
@@ -3400,7 +3678,7 @@ async def voice_stream_websocket(websocket: WebSocket):
                 in_thinking = chunk.get("in_thinking", False)
                 spoken_so_far = chunk.get("spoken_so_far", "")
                 
-                # Send token to client for progressive display
+                # Send token to client
                 await websocket.send_json({
                     "status": "token",
                     "token": token,
@@ -3408,11 +3686,10 @@ async def voice_stream_websocket(websocket: WebSocket):
                     "in_thinking": in_thinking
                 })
                 
-                # Only accumulate for TTS when NOT in thinking mode
+                # Accumulate for TTS
                 if not in_thinking and spoken_so_far:
                     current_sentence += token
                     
-                    # Check if we have a complete sentence
                     if any(current_sentence.rstrip().endswith(p) for p in ['.', '!', '?']):
                         sentence = current_sentence.strip()
                         if len(sentence) > 10:
@@ -3430,13 +3707,9 @@ async def voice_stream_websocket(websocket: WebSocket):
                                     "sentence": sentence,
                                     "audio_base64": audio_base64
                                 })
-                        
                         current_sentence = ""
                 
                 if chunk["is_complete"]:
-                    # Get final spoken response from the chunk
-                    final_spoken = chunk.get("spoken_so_far", "")
-                    thinking_content = chunk.get("thinking_content")
                     break
             
             gen_time = time.time() - gen_start
@@ -3480,7 +3753,7 @@ async def voice_stream_websocket(websocket: WebSocket):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        await websocket.send_json({"error": str(e)})
+        # await websocket.send_json({"error": str(e)}) # Optional
 
 # ============================================================================
 # Static Files
