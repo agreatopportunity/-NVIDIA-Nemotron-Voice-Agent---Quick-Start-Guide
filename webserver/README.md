@@ -16,8 +16,6 @@ A **high-performance, self-hosted AI voice assistant** powered by **NVIDIA Nemot
 
 Designed for **local execution**, **full control**, and **maximum performance**.
 
-**🌐 Live Demo:** [nemotron.burtoncummings.io](https://nemotron.burtoncummings.io)
-
 ---
 
 ## ✨ Key Features
@@ -578,7 +576,7 @@ python3 nemotron_web_server_vllm.py --list-models
 📚 Britannica:       ✅ CONFIGURED
 🎓 Academia:         ✅ CONFIGURED
 📺 YouTube Control:  ✅ ENABLED (voice commands)
-📍 Default Location: Branson, Missouri
+📍 Default Location: Chicago, Illinois
 🕐 Timezone:         America/Chicago
 💻 CUDA Version:     13.0
 🖥️  Driver Version:  580.120
@@ -780,5 +778,4 @@ MIT License
 <p align="center">
 <b>Built for people who want AI on their own hardware.</b><br>
 <i>Your AI • Your GPUs • Your Control</i><br><br>
-🌐 <a href="https://nemotron.burtoncummings.io">nemotron.burtoncummings.io</a>
 </p>
