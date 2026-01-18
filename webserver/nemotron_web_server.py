@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 """
-Nemotron Voice Agent - OPTIMIZED Web API Server v3.1
+Nemotron Voice Agent - OPTIMIZED Web API Server
 =====================================================
 FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
-
-HARDWARE OPTIMIZED FOR:
-- GPU 0 (cuda:0): RTX 4060 Ti 16GB - Main models ( LLM's )
-- GPU 1 (cuda:1): TITAN V 12GB - Whisper file transcription (ASR, TTS, Vision)
-- Driver: 550.x (DO NOT UPGRADE - optimal for Volta + Ada mixed setup)
-- CUDA: 12.4
 
 Usage:
     python nemotron_web_server.py
