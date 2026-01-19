@@ -1,18 +1,39 @@
 #!/usr/bin/env python3
 """
-Nemotron Voice Agent - OPTIMIZED Web API Server
+Nemotron Voice Agent - Web API Server 
 =====================================================
-FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision.
+FastAPI server with ASR, LLM (with thinking mode), TTS, Weather, DateTime, and Vision, Transciption, Email Services, Youtube Player, XSPACE.
 
 Usage:
-    python nemotron_web_server.py
-    python nemotron_web_server.py --think    # Enable reasoning mode
-    python nemotron_web_server.py --port 5050
+    python server.py
+    python server.py --think    # Enable reasoning mode
+    python server.py --port 5050
 
 Environment Variables (.env file):
-    OPENWEATHER_API_KEY=your_key_here
-    GOOGLE_API_KEY=your_google_api_key
-    GOOGLE_CSE_ID=your_search_engine_id
+# OpenWeather API Key
+# ================================================
+OPENWEATHER_API_KEY=your_key_here
+    
+#  GOOGLE SEARCH
+# ================================================    
+GOOGLE_API_KEY=your_google_api_key
+GOOGLE_CSE_ID=your_search_engine_id
+    
+# Email Configuration
+# ================================================    
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=YOUR_EMAIL_ADDRESS@GMAIL.COM
+SMTP_PASSWORD=SMTP_APP_PASSWORD
+IMAP_HOST=imap.gmail.com
+IMAP_PORT=993
+DEFAULT_FROM_EMAIL=YOUR_EMAIL_ADDRESS@GMAIL.COM
+SMTP_FROM_NAME=NEMOTRON AI
+    
+#  BRITANICA SEARCH
+# ================================================
+BRITANNICA_API_KEY=your_britanica_api_key    
+    
 """
 
 import os
@@ -34,6 +55,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import subprocess
 import torch
+from enum import Enum
 
 # === VOICE ENHANCEMENT IMPORTS ===
 try:
@@ -692,6 +714,44 @@ def process_youtube_command(text: str, last_query: Optional[str] = None) -> Tupl
             
     return None, last_query
 
+#=============================================================================
+# Email command patterns
+# ============================================================================
+last_mentioned_email_index: Optional[int] = None
+
+EMAIL_CHECK_PATTERN = re.compile(
+    r"(?:check|read|show|get|what's in|any new)\s*(?:my\s*)?(?:email|emails|inbox|mail|gmail)",
+    re.IGNORECASE
+)
+
+EMAIL_READ_PATTERN = re.compile(
+    r"(?:read|open|show|what does|what's in)\s*(?:email|mail)?\s*(?:#|number|num)?\s*(\d+)",
+    re.IGNORECASE
+)
+EMAIL_READ_FIRST = re.compile(
+    r"(?:read|open|show)\s*(?:the\s+)?(?:first|1st|latest|newest|recent)\s*(?:email|mail|one)",
+    re.IGNORECASE
+)
+EMAIL_READ_IT = re.compile(
+    r"(?:read|open|show)\s*(?:it|that|this)\s*(?:email|mail|one)?",
+    re.IGNORECASE
+)
+
+EMAIL_REPLY_SIMPLE = re.compile(
+    r"^(?:yes\s*,?\s*)?(?:reply|respond|answer|yes reply|yeah reply)\s*(?:to\s*(?:it|this|that))?\s*$",
+    re.IGNORECASE
+)
+
+def process_email_command(text: str, llm_generate_func=None) -> Optional[Dict]:
+    """
+    Process email commands - now routes to full workflow.
+    
+    Args:
+        text: User input
+        llm_generate_func: Optional LLM generation function for drafting
+    """
+    return process_email_workflow(text, llm_generate_func)
+
 # ============================================================================
 # Configuration
 # ============================================================================
@@ -708,10 +768,12 @@ class ServerConfig:
     # Model names
     # ======================================================
     asr_model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b"
+    
     # ======================================================
     # Vllm Model
     # ======================================================
-    llm_model_name: str = "nvidia/Nemotron-Mini-4B-Instruct"
+    llm_model_name: str = "nvidia/Nemotron-Mini-4B-Instruct" # TESTED EFFECIENT
+    
     #llm_model_name: str = "Qwen_Qwen3-8B"
     #llm_model_name: str = "Qwen/Qwen3-8B-AWQ"
     #llm_model_name: str = "Qwen/Qwen3-8B-GPTQ"
@@ -1430,7 +1492,7 @@ class ModelManager:
         self.actual_tts_engine = None
         self.actual_transcription_model = None
         # === END MODEL STATE TRACKING ===
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # RLock allows nested locking for methods that call each other
 
         
     def load_models(self):
@@ -1852,7 +1914,7 @@ class ModelManager:
             print(f"⚠️ Warmup warning: {e}")
     
     def analyze_image(self, image_data: str) -> str:
-        """Analyze image with BLIP."""
+        """Analyze image with BLIP (thread-safe)."""
         if not self.vision_model or not self.vision_processor:
             return "Vision model not available."
         
@@ -1868,16 +1930,17 @@ class ModelManager:
             image_bytes = base64.b64decode(image_data)
             image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
             
-            inputs = self.vision_processor(image, return_tensors="pt").to(config.device, torch.float16)
-            
-            with torch.no_grad():
-                output = self.vision_model.generate(
-                    **inputs,
-                    max_new_tokens=50,
-                    do_sample=False,
-                )
-            
-            description = self.vision_processor.decode(output[0], skip_special_tokens=True)
+            with self._lock:
+                inputs = self.vision_processor(image, return_tensors="pt").to(config.device, torch.float16)
+                
+                with torch.no_grad():
+                    output = self.vision_model.generate(
+                        **inputs,
+                        max_new_tokens=50,
+                        do_sample=False,
+                    )
+                
+                description = self.vision_processor.decode(output[0], skip_special_tokens=True)
             
             elapsed = time.time() - start_time
             metrics.record("vision", elapsed)
@@ -1889,11 +1952,12 @@ class ModelManager:
             return f"Could not analyze image: {str(e)}"
         
     def transcribe(self, audio_path: str) -> str:
-        """Transcribe audio using Nemotron ASR."""
+        """Transcribe audio using Nemotron ASR (thread-safe)."""
         start_time = time.time()
         
-        with torch.no_grad():
-            transcriptions = self.asr_model.transcribe([audio_path])
+        with self._lock:
+            with torch.no_grad():
+                transcriptions = self.asr_model.transcribe([audio_path])
             
         elapsed = time.time() - start_time
         metrics.record("asr", elapsed)
@@ -1924,55 +1988,56 @@ class ModelManager:
         return {"error": "No transcription model loaded. Need second GPU."}
     
     def _transcribe_with_canary(self, audio_path: str, language: str = None) -> Dict:
-        """Transcribe using NVIDIA Canary-1B-Flash."""
+        """Transcribe using NVIDIA Canary-1B-Flash (thread-safe)."""
         import math
         start_time = time.time()
         
         print(f"🎧 Transcribing with Canary: {audio_path}")
         
-        try:
-            with torch.no_grad():
-                # Canary returns list of hypotheses
-                transcriptions = self.canary_model.transcribe([audio_path])
-            
-            if not transcriptions:
-                return {"error": "No transcription result"}
-            
-            result = transcriptions[0]
-            
-            # Handle different result formats
-            if isinstance(result, str):
-                full_text = result
-            elif hasattr(result, 'text'):
-                full_text = result.text
-            else:
-                full_text = str(result)
-            
-            elapsed = time.time() - start_time
-            
-            print(f"✓ Canary transcription complete in {elapsed:.1f}s ({len(full_text)} chars)")
-            
-            return {
-                "transcript": full_text.strip(),
-                "language": language or "en",
-                "language_probability": 1.0,
-                "duration": 0.0,  # Canary doesn't provide duration
-                "segments": [{"start": 0.0, "end": 0.0, "text": full_text.strip()}],
-                "processing_time": round(elapsed, 2),
-                "model": "canary-1b-flash"
-            }
-            
-        except Exception as e:
-            print(f"❌ Canary transcription error: {e}")
-            import traceback
-            traceback.print_exc()
-            
-            # Try Whisper fallback if available
-            if self.whisper_model is not None:
-                print("   Falling back to Whisper...")
-                return self._transcribe_with_whisper(audio_path, language)
-            
-            return {"error": str(e)}
+        with self._lock:
+            try:
+                with torch.no_grad():
+                    # Canary returns list of hypotheses
+                    transcriptions = self.canary_model.transcribe([audio_path])
+                
+                if not transcriptions:
+                    return {"error": "No transcription result"}
+                
+                result = transcriptions[0]
+                
+                # Handle different result formats
+                if isinstance(result, str):
+                    full_text = result
+                elif hasattr(result, 'text'):
+                    full_text = result.text
+                else:
+                    full_text = str(result)
+                
+                elapsed = time.time() - start_time
+                
+                print(f"✓ Canary transcription complete in {elapsed:.1f}s ({len(full_text)} chars)")
+                
+                return {
+                    "transcript": full_text.strip(),
+                    "language": language or "en",
+                    "language_probability": 1.0,
+                    "duration": 0.0,  # Canary doesn't provide duration
+                    "segments": [{"start": 0.0, "end": 0.0, "text": full_text.strip()}],
+                    "processing_time": round(elapsed, 2),
+                    "model": "canary-1b-flash"
+                }
+                
+            except Exception as e:
+                print(f"❌ Canary transcription error: {e}")
+                import traceback
+                traceback.print_exc()
+                
+                # Try Whisper fallback if available
+                if self.whisper_model is not None:
+                    print("   Falling back to Whisper...")
+                    return self._transcribe_with_whisper(audio_path, language)
+                
+                return {"error": str(e)}
     
     def _transcribe_with_whisper(self, audio_path: str, language: str = None) -> Dict:
         """Transcribe using Faster-Whisper (fallback)."""
@@ -2342,6 +2407,27 @@ Format: <think>analysis</think> spoken answer."""
         # Normalize for TTS
         spoken_response = normalize_for_tts(spoken_response)
 
+        # === FIX: Detect possible thinking leak in verbose responses ===
+        if spoken_response and len(spoken_response) > 1200:
+            thinking_indicators = [
+                "let me think", "i should", "the user", "i need to",
+                "first,", "okay,", "alright,", "hmm", "wait,",
+                "step 1", "step 2", "reasoning:", "analysis:",
+                "let me analyze", "i'll consider", "on second thought"
+            ]
+            response_lower = spoken_response.lower()
+            indicator_count = sum(1 for ind in thinking_indicators if ind in response_lower)
+            if indicator_count >= 2:
+                print(f"⚠️ Possible thinking leak detected ({indicator_count} indicators, {len(spoken_response)} chars)")
+                # Truncate to first ~500 chars at sentence boundary
+                first_part = spoken_response[:600]
+                last_sentence = max(first_part.rfind('.'), first_part.rfind('!'), first_part.rfind('?'))
+                if last_sentence > 200:
+                    spoken_response = spoken_response[:last_sentence + 1]
+                else:
+                    spoken_response = first_part[:500] + "..."
+                print(f"✂️ Truncated spoken response to {len(spoken_response)} chars")
+
         print(f"📝 Thinking: {len(thinking_content) if thinking_content else 0} chars")
         print(f"🗣️ Spoken: {len(spoken_response)} chars")
         if should_think and thinking_content:
@@ -2583,7 +2669,7 @@ Format: <think>analysis</think> spoken answer."""
 
     def synthesize_sentence(self, text: str) -> bytes:
         """
-        Synthesize a single sentence for streaming TTS.
+        Synthesize a single sentence for streaming TTS (thread-safe).
         Optimized for low latency on short text.
         """
         import numpy as np
@@ -2592,26 +2678,27 @@ Format: <think>analysis</think> spoken answer."""
         if not text.strip():
             return b""
         
-        if self.tts_fastpitch and self.tts_hifigan:
-            try:
-                with torch.no_grad():
-                    parsed = self.tts_fastpitch.parse(text)
-                    spectrogram = self.tts_fastpitch.generate_spectrogram(tokens=parsed)
-                    audio = self.tts_hifigan.convert_spectrogram_to_audio(spec=spectrogram)
-                
-                audio_np = audio.squeeze().cpu().numpy()
-                audio_np = audio_np / (np.abs(audio_np).max() + 1e-7)
-                
-                buffer = io.BytesIO()
-                with wave.open(buffer, 'wb') as wav_file:
-                    wav_file.setnchannels(1)
-                    wav_file.setsampwidth(2)
-                    wav_file.setframerate(config.tts_sample_rate)
-                    wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
-                
-                return buffer.getvalue()
-            except Exception as e:
-                print(f"⚠️ Sentence TTS error: {e}")
+        with self._lock:
+            if self.tts_fastpitch and self.tts_hifigan:
+                try:
+                    with torch.no_grad():
+                        parsed = self.tts_fastpitch.parse(text)
+                        spectrogram = self.tts_fastpitch.generate_spectrogram(tokens=parsed)
+                        audio = self.tts_hifigan.convert_spectrogram_to_audio(spec=spectrogram)
+                    
+                    audio_np = audio.squeeze().cpu().numpy()
+                    audio_np = audio_np / (np.abs(audio_np).max() + 1e-7)
+                    
+                    buffer = io.BytesIO()
+                    with wave.open(buffer, 'wb') as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(config.tts_sample_rate)
+                        wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
+                    
+                    return buffer.getvalue()
+                except Exception as e:
+                    print(f"⚠️ Sentence TTS error: {e}")
         
         return b""
 
@@ -2768,6 +2855,12 @@ Format: <think>analysis</think> spoken answer."""
         if not clean_text:
             clean_text = "I have nothing to say."
         
+        # === FIX: Global TTS safety limit for ALL engines ===
+        MAX_SAFE_TTS_CHARS = 2000  # Absolute max to prevent memory issues
+        if len(clean_text) > MAX_SAFE_TTS_CHARS:
+            print(f"⚠️ TTS SAFETY: Truncating {len(clean_text)} -> {MAX_SAFE_TTS_CHARS} chars")
+            clean_text = clean_text[:MAX_SAFE_TTS_CHARS]
+        
         # =====================================================
         # PRIORITY 1: Magpie TTS (highest quality, 5 voices)
         # =====================================================
@@ -2779,60 +2872,61 @@ Format: <think>analysis</think> spoken answer."""
         # PRIORITY 2: NeMo FastPitch + HiFi-GAN (fast, good quality)
         # =====================================================
         if self.tts_fastpitch and self.tts_hifigan:
-            try:
-                # Smart chunking for long text (FastPitch handles ~500 chars well)
-                max_chars = 500
-                sentences = SENTENCE_SPLIT_PATTERN.split(clean_text)
-                chunks = []
-                current_chunk = ""
-                
-                for sentence in sentences:
-                    if len(current_chunk) + len(sentence) < max_chars:
-                        current_chunk += sentence + " "
-                    else:
-                        if current_chunk:
-                            chunks.append(current_chunk.strip())
-                        current_chunk = sentence + " "
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                
-                all_audio = []
-                
-                for chunk in chunks:
-                    if not chunk.strip():
-                        continue
+            with self._lock:
+                try:
+                    # Smart chunking for long text (FastPitch handles ~500 chars well)
+                    max_chars = 500
+                    sentences = SENTENCE_SPLIT_PATTERN.split(clean_text)
+                    chunks = []
+                    current_chunk = ""
                     
-                    with torch.no_grad():
-                        parsed = self.tts_fastpitch.parse(chunk)
-                        spectrogram = self.tts_fastpitch.generate_spectrogram(tokens=parsed)
-                        audio = self.tts_hifigan.convert_spectrogram_to_audio(spec=spectrogram)
+                    for sentence in sentences:
+                        if len(current_chunk) + len(sentence) < max_chars:
+                            current_chunk += sentence + " "
+                        else:
+                            if current_chunk:
+                                chunks.append(current_chunk.strip())
+                            current_chunk = sentence + " "
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
                     
-                    audio_np = audio.squeeze().cpu().numpy()
-                    all_audio.append(audio_np)
-                
-                if not all_audio:
-                    return b""
-                
-                combined_audio = np.concatenate(all_audio)
-                combined_audio = combined_audio / (np.abs(combined_audio).max() + 1e-7)
-                
-                buffer = io.BytesIO()
-                with wave.open(buffer, 'wb') as wav_file:
-                    wav_file.setnchannels(1)
-                    wav_file.setsampwidth(2)
-                    wav_file.setframerate(config.tts_sample_rate)
-                    wav_file.writeframes((combined_audio * 32767).astype(np.int16).tobytes())
-                
-                elapsed = time.time() - start_time
-                metrics.record("tts", elapsed)
-                print(f"🔊 NeMo TTS: {len(clean_text)} chars -> {len(combined_audio)} samples in {elapsed*1000:.0f}ms")
-                
-                return buffer.getvalue()
-                
-            except Exception as e:
-                print(f"❌ NeMo TTS error: {e}")
-                import traceback
-                traceback.print_exc()
+                    all_audio = []
+                    
+                    for chunk in chunks:
+                        if not chunk.strip():
+                            continue
+                        
+                        with torch.no_grad():
+                            parsed = self.tts_fastpitch.parse(chunk)
+                            spectrogram = self.tts_fastpitch.generate_spectrogram(tokens=parsed)
+                            audio = self.tts_hifigan.convert_spectrogram_to_audio(spec=spectrogram)
+                        
+                        audio_np = audio.squeeze().cpu().numpy()
+                        all_audio.append(audio_np)
+                    
+                    if not all_audio:
+                        return b""
+                    
+                    combined_audio = np.concatenate(all_audio)
+                    combined_audio = combined_audio / (np.abs(combined_audio).max() + 1e-7)
+                    
+                    buffer = io.BytesIO()
+                    with wave.open(buffer, 'wb') as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(config.tts_sample_rate)
+                        wav_file.writeframes((combined_audio * 32767).astype(np.int16).tobytes())
+                    
+                    elapsed = time.time() - start_time
+                    metrics.record("tts", elapsed)
+                    print(f"🔊 NeMo TTS: {len(clean_text)} chars -> {len(combined_audio)} samples in {elapsed*1000:.0f}ms")
+                    
+                    return buffer.getvalue()
+                    
+                except Exception as e:
+                    print(f"❌ NeMo TTS error: {e}")
+                    import traceback
+                    traceback.print_exc()
         
         # =====================================================
         # PRIORITY 3: Silero (fallback)
@@ -2939,7 +3033,7 @@ Format: <think>analysis</think> spoken answer."""
             return False
 
     def synthesize_magpie(self, text: str, speaker: str = None, language: str = "en") -> bytes:
-        """Synthesize speech with NVIDIA Magpie TTS."""
+        """Synthesize speech with NVIDIA Magpie TTS (thread-safe)."""
         if not self.magpie_tts:
             return self._synthesize_nemo(text)
         
@@ -2948,52 +3042,74 @@ Format: <think>analysis</think> spoken answer."""
         
         start_time = time.time()
         
-        try:
-            clean_text = TTS_CLEANUP_PATTERN.sub('', text)
-            clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
-            
-            if not clean_text or len(clean_text) < 2:
-                return b""
-            
-            speaker_name = speaker or "Sofia"
-            speaker_idx = self.magpie_speaker_map.get(speaker_name, 1)
-            
-            with torch.no_grad():
-                audio, audio_len = self.magpie_tts.do_tts(
-                    clean_text,
-                    language=language,
-                    apply_TN=True,
-                    speaker_index=speaker_idx
-                )
-            
-            if isinstance(audio, torch.Tensor):
-                audio_np = audio.squeeze().cpu().numpy()
-            else:
-                audio_np = np.array(audio).squeeze()
-            
-            max_val = np.abs(audio_np).max()
-            if max_val > 0:
-                audio_np = audio_np / max_val * 0.95
-            
-            buffer = io.BytesIO()
-            import wave
-            with wave.open(buffer, 'wb') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(22050)
-                wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
-            
-            elapsed = time.time() - start_time
-            print(f"🔊 Magpie ({speaker_name}): {len(clean_text)} chars in {elapsed*1000:.0f}ms")
-            
-            return buffer.getvalue()
-            
-        except Exception as e:
-            print(f"❌ Magpie error: {e}")
-            return self._synthesize_nemo(text)
+        with self._lock:
+            try:
+                clean_text = TTS_CLEANUP_PATTERN.sub('', text)
+                clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
+                
+                if not clean_text or len(clean_text) < 2:
+                    return b""
+                
+                # === FIX: CRITICAL - Limit text length to prevent CUDA OOM ===
+                MAX_MAGPIE_CHARS = 1500  # ~30 seconds of speech max, prevents OOM
+                if len(clean_text) > MAX_MAGPIE_CHARS:
+                    print(f"⚠️ Magpie truncating {len(clean_text)} -> {MAX_MAGPIE_CHARS} chars to prevent OOM")
+                    truncated = clean_text[:MAX_MAGPIE_CHARS]
+                    # Try to cut at sentence boundary
+                    last_period = truncated.rfind('.')
+                    last_question = truncated.rfind('?')
+                    last_exclaim = truncated.rfind('!')
+                    cut_point = max(last_period, last_question, last_exclaim)
+                    if cut_point > MAX_MAGPIE_CHARS // 2:
+                        clean_text = truncated[:cut_point + 1]
+                    else:
+                        clean_text = truncated + "..."
+                
+                speaker_name = speaker or "Sofia"
+                speaker_idx = self.magpie_speaker_map.get(speaker_name, 1)
+                
+                with torch.no_grad():
+                    audio, audio_len = self.magpie_tts.do_tts(
+                        clean_text,
+                        language=language,
+                        apply_TN=True,
+                        speaker_index=speaker_idx
+                    )
+                
+                if isinstance(audio, torch.Tensor):
+                    audio_np = audio.squeeze().cpu().numpy()
+                else:
+                    audio_np = np.array(audio).squeeze()
+                
+                max_val = np.abs(audio_np).max()
+                if max_val > 0:
+                    audio_np = audio_np / max_val * 0.95
+                
+                buffer = io.BytesIO()
+                import wave
+                with wave.open(buffer, 'wb') as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(22050)
+                    wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
+                
+                elapsed = time.time() - start_time
+                print(f"🔊 Magpie ({speaker_name}): {len(clean_text)} chars in {elapsed*1000:.0f}ms")
+                
+                return buffer.getvalue()
+                
+            except Exception as e:
+                print(f"❌ Magpie error: {e}")
+                # === FIX: Clear CUDA cache on OOM to free stuck memory ===
+                if "CUDA out of memory" in str(e) or "out of memory" in str(e).lower():
+                    print("🧹 Clearing CUDA cache after OOM...")
+                    torch.cuda.empty_cache()
+                    import gc
+                    gc.collect()
+                return self._synthesize_nemo(text[:1000])  # Limit fallback length too
 
     def _synthesize_nemo(self, text: str) -> bytes:
-        """Fallback to NeMo FastPitch when Magpie fails."""
+        """Fallback to NeMo FastPitch when Magpie fails (thread-safe)."""
         import numpy as np
         import io
     
@@ -3001,39 +3117,40 @@ Format: <think>analysis</think> spoken answer."""
             print("⚠️ NeMo TTS not available for fallback")
             return b""
     
-        try:
-            clean_text = clean_numbers_for_tts(text)
-            clean_text = TTS_CLEANUP_PATTERN.sub('', clean_text)
-            clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
-        
-            if not clean_text:
+        with self._lock:
+            try:
+                clean_text = clean_numbers_for_tts(text)
+                clean_text = TTS_CLEANUP_PATTERN.sub('', clean_text)
+                clean_text = WHITESPACE_PATTERN.sub(' ', clean_text).strip()
+            
+                if not clean_text:
+                    return b""
+            
+                start_time = time.time()
+            
+                with torch.no_grad():
+                    parsed = self.tts_fastpitch.parse(clean_text[:500])  # Limit length
+                    spectrogram = self.tts_fastpitch.generate_spectrogram(tokens=parsed)
+                    audio = self.tts_hifigan.convert_spectrogram_to_audio(spec=spectrogram)
+            
+                audio_np = audio.squeeze().cpu().numpy()
+                audio_np = audio_np / (np.abs(audio_np).max() + 1e-7)
+            
+                buffer = io.BytesIO()
+                with wave.open(buffer, 'wb') as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(config.tts_sample_rate)
+                    wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
+            
+                elapsed = time.time() - start_time
+                print(f"🔊 NeMo Fallback TTS: {len(clean_text)} chars in {elapsed*1000:.0f}ms")
+            
+                return buffer.getvalue()
+            
+            except Exception as e:
+                print(f"❌ NeMo fallback also failed: {e}")
                 return b""
-        
-            start_time = time.time()
-        
-            with torch.no_grad():
-                parsed = self.tts_fastpitch.parse(clean_text[:500])  # Limit length
-                spectrogram = self.tts_fastpitch.generate_spectrogram(tokens=parsed)
-                audio = self.tts_hifigan.convert_spectrogram_to_audio(spec=spectrogram)
-        
-            audio_np = audio.squeeze().cpu().numpy()
-            audio_np = audio_np / (np.abs(audio_np).max() + 1e-7)
-        
-            buffer = io.BytesIO()
-            with wave.open(buffer, 'wb') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(config.tts_sample_rate)
-                wav_file.writeframes((audio_np * 32767).astype(np.int16).tobytes())
-        
-            elapsed = time.time() - start_time
-            print(f"🔊 NeMo Fallback TTS: {len(clean_text)} chars in {elapsed*1000:.0f}ms")
-        
-            return buffer.getvalue()
-        
-        except Exception as e:
-            print(f"❌ NeMo fallback also failed: {e}")
-            return b""
 
     def _load_xtts(self):
         """Load Coqui XTTS v2 for high-quality voice synthesis with voice cloning."""
@@ -3152,10 +3269,10 @@ async def shutdown_event():
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    ui_path = Path(__file__).parent / "nemotron_web_ui.html"
+    ui_path = Path(__file__).parent / "index.html"
     if ui_path.exists():
         return HTMLResponse(content=ui_path.read_text())
-    return HTMLResponse(content="<h1>Nemotron Voice Agent v3.1 - NeMo TTS</h1>")
+    return HTMLResponse(content="<h1>Nemotron Agent Ai 2026</h1>")
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -3243,7 +3360,31 @@ async def chat(request: ChatRequest):
         )
     # === END X SPACES COMMAND CHECK ===
     
-    # Image analysis
+    # === CHECK EMAIL COMMANDS ===
+    def llm_draft_helper(prompt):
+        return models.generate(prompt, system_prompt="You are a helpful email writing assistant. Write concise, professional emails.")
+
+    email_result = process_email_command(request.message, llm_generate_func=llm_draft_helper)
+    if email_result:
+        tts_text = email_result.get("summary", "Done.")
+    
+    # Synthesize voice response
+        tts_start = time.time()
+        audio_bytes = models.synthesize(tts_text, speaker_id=request.voice)
+        audio_base64 = base64.b64encode(audio_bytes).decode() if audio_bytes else None
+        timings["tts"] = time.time() - tts_start
+        timings["total"] = time.time() - total_start
+    
+        return ChatResponse(
+            response=email_result.get("summary", ""),
+            thinking=None,
+            audio_base64=audio_base64,
+            timing=timings,
+            command={"type": "email", "action": email_result.get("type")}
+        )
+    # === END EMAIL COMMAND CHECK ===
+
+    # === Image analysis  ===
     image_description = None
     if request.image_data:
         img_start = time.time()
@@ -3589,6 +3730,691 @@ async def set_voice_engine(engine: str):
     config.tts_engine = engine
     return {"status": "ok", "engine": engine}
 # === END VOICE LISTING ENDPOINT ===
+
+# ============================================================================
+# EMAIL INTEGRATION (Gmail IMAP)
+# ============================================================================
+import imaplib
+import email
+from email.header import decode_header
+
+def get_unread_emails(max_emails: int = 5) -> List[Dict]:
+    """Fetch unread emails from Gmail PRIMARY inbox only via IMAP."""
+    imap_host = os.getenv("IMAP_HOST", "imap.gmail.com")
+    imap_port = int(os.getenv("IMAP_PORT", 993))
+    username = os.getenv("SMTP_USERNAME")
+    password = os.getenv("SMTP_PASSWORD")
+    
+    if not username or not password:
+        return [{"error": "Email credentials not configured"}]
+    
+    emails = []
+    
+    try:
+        # Connect to Gmail IMAP
+        mail = imaplib.IMAP4_SSL(imap_host, imap_port)
+        imaplib._MAXLINE = 10000000  # 10MB limit
+        
+        mail.login(username, password)
+        mail.select("INBOX")
+        
+        # Use Gmail's X-GM-RAW extension to filter by category
+        try:
+            # Try Gmail-specific search first (PRIMARY only, unread)
+            status, messages = mail.search(None, 'X-GM-RAW "category:primary is:unread"')
+        except:
+            # Fallback for non-Gmail IMAP servers
+            from datetime import datetime, timedelta
+            since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
+            status, messages = mail.search(None, f'(UNSEEN SINCE {since_date})')
+        
+        if status != "OK" or not messages[0]:
+            mail.logout()
+            return [{"info": "No unread emails in Primary inbox"}]
+        
+        email_ids = messages[0].split()
+        
+        if not email_ids:
+            mail.logout()
+            return [{"info": "No unread emails in Primary inbox"}]
+        
+        # Get only the most recent emails (last N)
+        recent_ids = email_ids[-max_emails:] if len(email_ids) > max_emails else email_ids
+        recent_ids = list(reversed(recent_ids))  # Newest first
+        
+        for email_id in recent_ids:
+            try:
+                # Fetch with size limit
+                status, msg_data = mail.fetch(email_id, "(RFC822.SIZE)")
+                if status == "OK" and msg_data[0]:
+                    size_match = re.search(r'RFC822\.SIZE\s+(\d+)', msg_data[0].decode())
+                    if size_match:
+                        size = int(size_match.group(1))
+                        if size > 500000:  # Skip emails > 500KB
+                            continue
+                
+                status, msg_data = mail.fetch(email_id, "(RFC822)")
+                if status != "OK":
+                    continue
+                    
+                raw_email = msg_data[0][1]
+                msg = email.message_from_bytes(raw_email)
+                
+                # Decode subject
+                subject_header = msg["Subject"] or "(No Subject)"
+                decoded_parts = decode_header(subject_header)
+                subject = ""
+                for part, encoding in decoded_parts:
+                    if isinstance(part, bytes):
+                        subject += part.decode(encoding or 'utf-8', errors='replace')
+                    else:
+                        subject += part
+                
+                # Decode from
+                from_header = msg["From"] or "Unknown"
+                decoded_from = decode_header(from_header)
+                from_addr = ""
+                for part, encoding in decoded_from:
+                    if isinstance(part, bytes):
+                        from_addr += part.decode(encoding or 'utf-8', errors='replace')
+                    else:
+                        from_addr += part
+                
+                # Get message ID for threading replies
+                message_id = msg.get("Message-ID", "")
+                
+                # Get body preview
+                body_preview = ""
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        if part.get_content_type() == "text/plain":
+                            try:
+                                body_preview = part.get_payload(decode=True).decode('utf-8', errors='replace')[:300]
+                            except:
+                                pass
+                            break
+                else:
+                    try:
+                        body_preview = msg.get_payload(decode=True).decode('utf-8', errors='replace')[:300]
+                    except:
+                        pass
+                
+                # Extract just the email address
+                email_match = re.search(r'<(.+?)>', from_addr)
+                reply_to_addr = email_match.group(1) if email_match else from_addr
+                
+                emails.append({
+                    "from": from_addr,
+                    "from_email": reply_to_addr,
+                    "subject": subject.strip(),
+                    "preview": body_preview.strip(),
+                    "message_id": message_id,
+                    "date": msg.get("Date", "")
+                })
+                
+            except Exception as e:
+                print(f"⚠️ Error parsing email: {e}")
+                continue
+        
+        mail.logout()
+        
+        # Cache for reply workflow
+        email_session.cached_emails = emails
+        
+        return emails
+        
+    except imaplib.IMAP4.error as e:
+        print(f"❌ IMAP Error: {e}")
+        return [{"error": f"IMAP error: {str(e)}"}]
+    except Exception as e:
+        print(f"❌ Email fetch error: {e}")
+        return [{"error": str(e)}]
+
+
+def process_email_workflow(text: str, llm_generate_func=None) -> Optional[Dict]:
+    """
+    Process email workflow commands.
+    
+    Args:
+        text: User's voice/text input
+        llm_generate_func: Function to call LLM for drafting (optional)
+    
+    Returns:
+        Dict with response info or None if not an email command
+    """
+    global email_session
+    text_lower = text.lower().strip()
+    
+    # =========================================================================
+    # STATE: IDLE - Check for initial commands
+    # =========================================================================
+    if email_session.state == EmailWorkflowState.IDLE:
+        
+        # --- Check emails  ---
+        if EMAIL_CHECK_PATTERN.search(text):
+            emails = get_unread_emails(5)
+            
+            if not emails or "error" in emails[0]:
+                return {"type": "email_error", "summary": "I couldn't check your email. Please try again."}
+            
+            if "info" in emails[0]:
+                return {"type": "email_summary", "summary": "You have no unread emails in your Primary inbox."}
+            
+            count = len(emails)
+            summary = f"You have {count} unread email{'s' if count > 1 else ''} in your Primary inbox. "
+            for i, e in enumerate(emails[:3], 1):
+                sender_name = e['from'].split('<')[0].strip().strip('"')
+                summary += f"Email {i}: From {sender_name}, subject: {e['subject']}. "
+            
+            summary += "Would you like to reply to any of these?"
+            
+            return {
+                "type": "email_summary",
+                "summary": summary,
+                "emails": emails,
+                "hint": "Say 'reply to email 1' or 'reply to the first email' to respond."
+            }
+
+        # --- Read specific email ---
+        read_match = EMAIL_READ_PATTERN.search(text)
+        read_first = EMAIL_READ_FIRST.search(text)
+        read_it = EMAIL_READ_IT.search(text)
+        
+        if read_match or read_first or read_it:
+            # Determine which email
+            if read_first:
+                email_num = 1
+            elif read_match and read_match.group(1):
+                email_num = int(read_match.group(1))
+            elif read_it and last_mentioned_email_index:
+                email_num = last_mentioned_email_index
+            else:
+                email_num = 1
+            
+            if not email_session.cached_emails:
+                emails = get_unread_emails(5)
+                if not emails or "error" in emails[0] or "info" in emails[0]:
+                    return {
+                        "type": "email_error",
+                        "summary": "Please check your email first by saying 'check my email'."
+                    }
+            
+            if email_num < 1 or email_num > len(email_session.cached_emails):
+                return {
+                    "type": "email_error",
+                    "summary": f"I only found {len(email_session.cached_emails)} emails. Pick a number between 1 and {len(email_session.cached_emails)}."
+                }
+            
+            email_to_read = email_session.cached_emails[email_num - 1]
+            last_mentioned_email_index = email_num
+            
+            sender = email_to_read['from'].split('<')[0].strip().strip('"')
+            subject = email_to_read['subject']
+            preview = email_to_read.get('preview', 'No preview available.')
+            date = email_to_read.get('date', '')
+            
+            preview_clean = ' '.join(preview.replace('\n', ' ').replace('\r', ' ').split())
+            if len(preview_clean) > 600:
+                preview_clean = preview_clean[:600] + "... The message continues."
+            
+            summary = f"Email {email_num} from {sender}. Subject: {subject}. "
+            
+            try:
+                from email.utils import parsedate_to_datetime
+                dt = parsedate_to_datetime(date)
+                summary += f"Received {dt.strftime('%A at %I:%M %p')}. "
+            except:
+                pass
+            
+            summary += f"The message says: {preview_clean} "
+            summary += "Would you like to reply, read another email, or go back?"
+            
+            return {
+                "type": "email_read",
+                "summary": summary,
+                "email": email_to_read,
+                "email_number": email_num
+            }
+        
+        # --- Simple "reply" after reading ---
+        if EMAIL_REPLY_SIMPLE.search(text) and last_mentioned_email_index:
+            email_num = last_mentioned_email_index
+            
+            if email_session.cached_emails and email_num <= len(email_session.cached_emails):
+                email_session.reply_to_email = email_session.cached_emails[email_num - 1]
+                email_session.reply_to_index = email_num
+                email_session.state = EmailWorkflowState.COMPOSING
+                
+                sender = email_session.reply_to_email['from'].split('<')[0].strip().strip('"')
+                
+                return {
+                    "type": "email_reply_start",
+                    "summary": f"Replying to {sender}. What would you like to say?",
+                    "email": email_session.reply_to_email,
+                    "state": "composing"
+                }
+        
+        # --- Reply to specific email number ---
+        reply_match = EMAIL_REPLY_PATTERN.search(text)
+        reply_first = EMAIL_REPLY_FIRST.search(text)
+        
+        if reply_match or reply_first:
+            if reply_first:
+                email_num = 1
+            elif reply_match and reply_match.group(1):
+                email_num = int(reply_match.group(1))
+            else:
+                email_num = 1
+            
+            if not email_session.cached_emails:
+                emails = get_unread_emails(5)
+                if not emails or "error" in emails[0] or "info" in emails[0]:
+                    return {
+                        "type": "email_error",
+                        "summary": "Please check your email first so I know which one to reply to."
+                    }
+            
+            if email_num < 1 or email_num > len(email_session.cached_emails):
+                return {
+                    "type": "email_error",
+                    "summary": f"I only found {len(email_session.cached_emails)} emails. Pick between 1 and {len(email_session.cached_emails)}."
+                }
+            
+            email_session.reply_to_email = email_session.cached_emails[email_num - 1]
+            email_session.reply_to_index = email_num
+            email_session.state = EmailWorkflowState.COMPOSING
+            last_mentioned_email_index = email_num
+            
+            sender = email_session.reply_to_email['from'].split('<')[0].strip().strip('"')
+            subject = email_session.reply_to_email['subject']
+            
+            return {
+                "type": "email_reply_start",
+                "summary": f"Replying to email {email_num} from {sender} about '{subject}'. What would you like to say? Speak your message, or say 'write it for me'.",
+                "email": email_session.reply_to_email,
+                "state": "composing"
+            }
+        
+        # --- Compose new email ---
+        compose_match = EMAIL_COMPOSE_PATTERN.search(text)
+        send_to_match = EMAIL_SEND_TO_PATTERN.search(text)
+        
+        if compose_match or send_to_match:
+            email_session.state = EmailWorkflowState.COMPOSING
+            last_mentioned_email_index = None
+            
+            if send_to_match:
+                email_session.recipient = send_to_match.group(1)
+                return {
+                    "type": "email_compose_start",
+                    "summary": f"Composing email to {email_session.recipient}. What's the subject?",
+                    "state": "need_subject"
+                }
+            else:
+                return {
+                    "type": "email_compose_start", 
+                    "summary": "Who would you like to send the email to?",
+                    "state": "need_recipient"
+                }
+    
+    # =========================================================================
+    # STATE: COMPOSING - User is writing/dictating their message
+    # =========================================================================
+    elif email_session.state == EmailWorkflowState.COMPOSING:
+        
+        # --- Cancel ---
+        if SEND_CANCEL_PATTERN.search(text):
+            email_session.reset()
+            return {
+                "type": "email_cancelled",
+                "summary": "Email cancelled. Is there anything else I can help with?"
+            }
+        
+        # --- LLM write entire draft ---
+        if LLM_WRITE_PATTERN.search(text) and llm_generate_func:
+            email_session.state = EmailWorkflowState.LLM_DRAFTING
+            
+            context = ""
+            if email_session.reply_to_email:
+                context = f"""Write a professional email reply.
+Original email from: {email_session.reply_to_email['from']}
+Subject: {email_session.reply_to_email['subject']}
+Their message preview: {email_session.reply_to_email.get('preview', 'N/A')}
+
+Write a helpful, concise, professional response. Just the email body, no subject line."""
+            else:
+                context = f"""Write a professional email.
+To: {email_session.recipient}
+Subject: {email_session.subject or 'TBD'}
+
+Write a helpful, concise, professional message. Just the email body."""
+            
+            # Call LLM
+            _, _, draft = llm_generate_func(context)
+            email_session.llm_draft = draft
+            email_session.final_draft = draft
+            email_session.state = EmailWorkflowState.REVIEWING
+            
+            return {
+                "type": "email_draft_ready",
+                "summary": f"Here's my draft: {draft[:200]}... Would you like me to send it, make changes, or should I improve it?",
+                "draft": draft,
+                "state": "reviewing"
+            }
+        
+        # --- User providing their draft ---
+        # If it's a substantial message (not just a command), treat as draft
+        if len(text) > 20 and not any(p.search(text) for p in [LLM_WRITE_PATTERN, LLM_IMPROVE_PATTERN, SEND_APPROVE_PATTERN]):
+            email_session.user_draft = text
+            email_session.final_draft = text
+            email_session.state = EmailWorkflowState.REVIEWING
+            
+            return {
+                "type": "email_draft_ready",
+                "summary": f"Got it. Here's your draft: '{text[:100]}...' Would you like to send it as is, have me improve it, or make changes?",
+                "draft": text,
+                "state": "reviewing"
+            }
+        
+        # --- Need more info for new email ---
+        if not email_session.reply_to_email:
+            if not email_session.recipient:
+                # Check if this looks like an email address
+                email_match = re.search(r'([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)', text)
+                if email_match:
+                    email_session.recipient = email_match.group(1)
+                    return {
+                        "type": "email_compose_continue",
+                        "summary": f"Got it, sending to {email_session.recipient}. What's the subject line?",
+                        "state": "need_subject"
+                    }
+            elif not email_session.subject:
+                email_session.subject = text
+                return {
+                    "type": "email_compose_continue",
+                    "summary": f"Subject: '{text}'. Now, what would you like to say? You can dictate your message or say 'write it for me'.",
+                    "state": "need_body"
+                }
+    
+    # =========================================================================
+    # STATE: REVIEWING - Draft ready, awaiting approval
+    # =========================================================================
+    elif email_session.state == EmailWorkflowState.REVIEWING:
+        
+        # --- Approve and send ---
+        if SEND_APPROVE_PATTERN.search(text):
+            # Determine recipient
+            if email_session.reply_to_email:
+                to_addr = email_session.reply_to_email['from_email']
+                subject = email_session.reply_to_email['subject']
+                msg_id = email_session.reply_to_email.get('message_id')
+                
+                result = send_email(
+                    to_address=to_addr,
+                    subject=subject,
+                    body=email_session.final_draft,
+                    reply_to_message_id=msg_id,
+                    in_reply_to_subject=subject
+                )
+            else:
+                result = send_email(
+                    to_address=email_session.recipient,
+                    subject=email_session.subject,
+                    body=email_session.final_draft
+                )
+            
+            email_session.reset()
+            
+            if result['success']:
+                return {
+                    "type": "email_sent",
+                    "summary": "Email sent successfully!",
+                    "result": result
+                }
+            else:
+                return {
+                    "type": "email_error",
+                    "summary": f"Failed to send email: {result['error']}",
+                    "result": result
+                }
+        
+        # --- Cancel ---
+        if SEND_CANCEL_PATTERN.search(text):
+            email_session.reset()
+            return {
+                "type": "email_cancelled",
+                "summary": "Email cancelled. The draft has been discarded."
+            }
+        
+        # --- Improve with LLM ---
+        if LLM_IMPROVE_PATTERN.search(text) and llm_generate_func:
+            context = f"""Improve this email draft. Make it more professional, clear, and concise while keeping the same intent.
+
+Original draft:
+{email_session.final_draft}
+
+Return only the improved email body, nothing else."""
+            
+            _, _, improved = llm_generate_func(context)
+            email_session.llm_draft = improved
+            email_session.final_draft = improved
+            
+            return {
+                "type": "email_draft_improved",
+                "summary": f"Here's the improved version: {improved[:200]}... Would you like to send this, or make more changes?",
+                "draft": improved,
+                "state": "reviewing"
+            }
+        
+        # --- Edit - user provides new version ---
+        if EDIT_PATTERN.search(text):
+            email_session.state = EmailWorkflowState.COMPOSING
+            return {
+                "type": "email_editing",
+                "summary": "Okay, what would you like the email to say instead?",
+                "state": "composing"
+            }
+        
+        # --- User providing new draft text ---
+        if len(text) > 20:
+            email_session.user_draft = text
+            email_session.final_draft = text
+            
+            return {
+                "type": "email_draft_updated",
+                "summary": f"Updated draft: '{text[:100]}...' Ready to send, improve, or make more changes?",
+                "draft": text,
+                "state": "reviewing"
+            }
+    
+    return None
+
+@app.get("/email/unread")
+async def get_unread():
+    """API endpoint to get unread emails."""
+    emails = get_unread_emails(5)
+    return {"emails": emails, "count": len(emails)}
+
+# ============================================================================
+# EMAIL STATE MANAGEMENT
+# ============================================================================
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from dataclasses import dataclass, field
+from typing import Optional, Dict, List
+from enum import Enum
+import re
+
+class EmailWorkflowState(Enum):
+    IDLE = "idle"
+    SELECTING_EMAIL = "selecting"      # User picking which email to reply to
+    COMPOSING = "composing"            # User is writing their message
+    LLM_DRAFTING = "llm_drafting"      # LLM is writing the draft
+    REVIEWING = "reviewing"            # Showing draft for approval
+    AWAITING_SEND = "awaiting_send"    # Ready to send on confirmation
+
+@dataclass
+class EmailSession:
+    """Tracks the current email workflow state."""
+    state: EmailWorkflowState = EmailWorkflowState.IDLE
+    
+    # For replies
+    reply_to_email: Optional[Dict] = None  # The email being replied to
+    reply_to_index: Optional[int] = None   # Which email (1, 2, 3...)
+    
+    # For new compositions
+    recipient: Optional[str] = None
+    recipient_name: Optional[str] = None
+    subject: Optional[str] = None
+    
+    # Draft content
+    user_draft: Optional[str] = None       # What user wrote
+    llm_draft: Optional[str] = None        # What LLM generated/improved
+    final_draft: Optional[str] = None      # The approved version
+    
+    # Cached emails from last check
+    cached_emails: List[Dict] = field(default_factory=list)
+    
+    def reset(self):
+        """Reset to idle state."""
+        self.state = EmailWorkflowState.IDLE
+        self.reply_to_email = None
+        self.reply_to_index = None
+        self.recipient = None
+        self.recipient_name = None
+        self.subject = None
+        self.user_draft = None
+        self.llm_draft = None
+        self.final_draft = None
+
+# Global email session
+email_session = EmailSession()
+
+# ============================================================================
+# COMMAND PATTERNS
+# ============================================================================
+
+# Reply patterns
+EMAIL_REPLY_PATTERN = re.compile(
+    r"(?:reply|respond|answer)\s*(?:to)?\s*(?:email|mail)?\s*(?:#|number|num)?\s*(\d+)?",
+    re.IGNORECASE
+)
+EMAIL_REPLY_FIRST = re.compile(
+    r"(?:reply|respond|answer)\s*(?:to)?\s*(?:the\s+)?(?:first|1st|latest|newest|recent)\s*(?:email|mail|one)?",
+    re.IGNORECASE
+)
+
+# Compose new email patterns
+EMAIL_COMPOSE_PATTERN = re.compile(
+    r"(?:compose|write|send|new)\s*(?:a|an)?\s*(?:new)?\s*(?:email|mail)\s*(?:to)?\s*(.+)?",
+    re.IGNORECASE
+)
+EMAIL_SEND_TO_PATTERN = re.compile(
+    r"(?:send|email|mail)\s+(?:to\s+)?([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)",
+    re.IGNORECASE
+)
+
+# Draft assistance patterns
+LLM_WRITE_PATTERN = re.compile(
+    r"(?:write|draft|compose)\s*(?:it|that|the response|a response|reply)?\s*(?:for me)?",
+    re.IGNORECASE
+)
+LLM_IMPROVE_PATTERN = re.compile(
+    r"(?:improve|enhance|make.*better|polish|rewrite|fix)\s*(?:it|that|my|the)?\s*(?:response|draft|email|message)?",
+    re.IGNORECASE
+)
+USER_DRAFT_PATTERN = re.compile(
+    r"(?:i(?:'|')?ll?\s+write|let me write|my draft is|here(?:'|')?s? my|i want to say)",
+    re.IGNORECASE
+)
+
+# Approval patterns
+SEND_APPROVE_PATTERN = re.compile(
+    r"(?:send|approve|confirm|yes|looks good|that(?:'|')?s? (?:good|perfect|fine)|go ahead|ship it)",
+    re.IGNORECASE
+)
+SEND_CANCEL_PATTERN = re.compile(
+    r"(?:cancel|don(?:'|')?t send|stop|abort|no|nevermind|scratch that|forget it)",
+    re.IGNORECASE
+)
+EDIT_PATTERN = re.compile(
+    r"(?:edit|change|modify|update|revise)\s*(?:it|that|the draft)?",
+    re.IGNORECASE
+)
+
+# ============================================================================
+# SMTP EMAIL SENDING
+# ============================================================================
+
+def send_email(
+    to_address: str,
+    subject: str,
+    body: str,
+    reply_to_message_id: Optional[str] = None,
+    in_reply_to_subject: Optional[str] = None
+) -> Dict:
+    """
+    Send an email via SMTP (Gmail).
+    
+    Args:
+        to_address: Recipient email address
+        subject: Email subject line
+        body: Email body text
+        reply_to_message_id: Message-ID header for threading replies
+        in_reply_to_subject: Original subject (will add Re: if needed)
+    
+    Returns:
+        Dict with 'success' bool and 'message' or 'error'
+    """
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", 587))
+    username = os.getenv("SMTP_USERNAME")
+    password = os.getenv("SMTP_PASSWORD")  # App password for Gmail
+    from_name = os.getenv("SMTP_FROM_NAME", "NEMOTRON AI")
+    
+    if not username or not password:
+        return {"success": False, "error": "Email credentials not configured"}
+    
+    try:
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = f"{from_name} <{username}>"
+        msg['To'] = to_address
+        
+        # Handle subject for replies
+        if in_reply_to_subject:
+            if not in_reply_to_subject.lower().startswith("re:"):
+                subject = f"Re: {in_reply_to_subject}"
+            else:
+                subject = in_reply_to_subject
+        msg['Subject'] = subject
+        
+        # Add threading headers for replies
+        if reply_to_message_id:
+            msg['In-Reply-To'] = reply_to_message_id
+            msg['References'] = reply_to_message_id
+        
+        # Attach body
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Connect and send
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(username, password)
+            server.send_message(msg)
+        
+        print(f"✉️ Email sent successfully to {to_address}")
+        return {"success": True, "message": f"Email sent to {to_address}"}
+        
+    except smtplib.SMTPAuthenticationError:
+        return {"success": False, "error": "Authentication failed. Check your app password."}
+    except smtplib.SMTPRecipientsRefused:
+        return {"success": False, "error": f"Recipient {to_address} was rejected"}
+    except Exception as e:
+        print(f"❌ SMTP Error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 # ============================================================================
