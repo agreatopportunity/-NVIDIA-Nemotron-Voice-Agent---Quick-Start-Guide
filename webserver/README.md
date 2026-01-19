@@ -184,6 +184,105 @@ AI: "Opening X Spaces discovery."
 
 ---
 
+### 📧 GMAIL INTEGRATION GUIDE
+
+## STEP 1: Add to your .env file
+
+```
+# Gmail IMAP/SMTP Settings
+IMAP_HOST=imap.gmail.com
+IMAP_PORT=993
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your.email@gmail.com
+SMTP_PASSWORD=your-16-char-app-password
+SMTP_FROM_NAME=NEMOTRON AI
+
+```
+
+NOTE: You need a Gmail App Password, not your regular password!
+1. Go to myaccount.google.com → Security → 2-Step Verification (enable if not)
+2. Go to myaccount.google.com → Security → App Passwords
+3. Create new app password for "Mail"
+4. Use that 16-character password in SMTP_PASSWORD
+
+## VOICE COMMANDS SUMMARY
+
+| Command                             | What it does                                              |
+| ----------------------------------- | --------------------------------------------------------- |
+| **“Check my email”**                | Lists recent emails (sender + subject) from PRIMARY inbox |
+| **“Any new mail?”**                 | Checks for unread emails                                  |
+| **“Read email 1 / 2 / 3”**          | Reads the full content of the selected email              |
+| **“Read the first / latest email”** | Reads the most recent email                               |
+| **“Open email 2”**                  | Opens and reads the specified email                       |
+| **“What does email 3 say?”**        | Reads email 3 aloud                                       |
+| **“Show email 1”**                  | Displays and reads email 1                                |
+| **“Read it”**                       | Reads the last referenced email (context-aware)           |
+| **“Reply to email 1 / 2 / 3”**      | Starts a reply to the specified email                     |
+| **“Reply” / “Respond to that”**     | Starts a reply to the currently open email                |
+| **“Write it for me”**               | LLM writes the full reply automatically                   |
+| **[Speak your message]**            | Your spoken words become the reply draft                  |
+| **“Improve it” / “Make it better”** | LLM refines and polishes the draft                        |
+| **“Send it” / “Looks good”**        | Sends the email                                           |
+| **“Cancel” / “Nevermind”**          | Cancels the reply and discards the draft                  |
+
+---
+
+### Notes (implicit behavior, no extra commands needed)
+
+* Commands like **“Read it”**, **“Reply”**, and **“Send it”** are **context-aware**
+* Drafts persist until **Send** or **Cancel**
+* Users can freely switch between **manual drafting** and **LLM-assisted drafting**
+
+"""
+CHECK EMAIL:
+- "Check my email"
+- "Read my inbox" 
+- "Any new mail?"
+
+READ EMAIL (NEW!):
+- "Read email 1"
+- "Read the first email"
+- "Open email 2"
+- "What does email 3 say?"
+- "Show email 1"
+- "Read it" (after mentioning an email)
+
+REPLY TO EMAIL:
+- "Reply to email 1"
+- "Reply" (after reading an email)
+- "Respond to that"
+- "Answer it"
+
+DRAFT OPTIONS:
+- "Write it for me" - LLM writes entire response
+- [Speak your message] - Your words become draft
+- "Improve it" - LLM enhances your draft
+
+SEND/CANCEL:
+- "Send it" / "Looks good" - Send
+- "Cancel" / "Nevermind" - Cancel
+
+EXAMPLE FLOW:
+1. "Check my email"
+   → Lists 5 emails with senders and subjects
+
+2. "Read email 2"
+   → Reads full content of email 2
+
+3. "Reply"
+   → Starts reply to email 2
+
+4. "Thanks for the update, I'll review tomorrow"
+   → Your draft is captured
+
+5. "Improve it"
+   → LLM polishes your draft
+
+6. "Send it"
+   → Email sent!
+"""
+---  
 ## 🖥️ Hardware Requirements
 
 ### Minimum
