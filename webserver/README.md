@@ -241,7 +241,6 @@ CHECK EMAIL:
 - "Any new mail?"
 
 READ EMAIL (NEW!):
-- "Read email 1"
 - "Read the first email"
 - "Open email 2"
 - "What does email 3 say?"
