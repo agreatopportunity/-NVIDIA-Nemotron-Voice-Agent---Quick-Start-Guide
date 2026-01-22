@@ -32,9 +32,21 @@ SMTP_FROM_NAME=NEMOTRON AI
     
 #  BRITANICA SEARCH
 # ================================================
-BRITANNICA_API_KEY=your_britanica_api_key    
+BRITANNICA_API_KEY=your_britanica_api_key   
+
+# COINGECKO API KEY 
+# ================================================
+COINGECKO_API_KEY=COIN_GECKO_API_KEY
+
+# TELEGRAM INFO
+# ================================================
+TELEGRAM_BOT_TOKEN=BOT_ID
+TELEGRAM_CHAT_ID=YOUR_CHAT_ID
+ALLOWED_CHAT_IDS=ALLOWED_CHATS
+ALLOWED_USERNAMES=USERS
     
 """
+
 
 import os
 import sys
@@ -438,7 +450,7 @@ YT_PLAY_PATTERN = re.compile(
 
 # 2. Strict Stop Pattern
 YT_STOP_PATTERN = re.compile(
-    r"(?:stop|clear|cancel|kill|end)\s*(?:youtube|music|video|queue|playlist|player|playback)?\b", 
+    r"\b(?:stop|clear|cancel|kill|end)\s*(?:youtube|music|video|queue|playlist|player|playback)?\b",
     re.IGNORECASE
 )
 
@@ -742,7 +754,7 @@ EMAIL_REPLY_SIMPLE = re.compile(
     re.IGNORECASE
 )
 
-def process_email_command(text: str, llm_generate_func=None) -> Optional[Dict]:
+async def process_email_command(text: str, llm_generate_func=None) -> Optional[Dict]:
     """
     Process email commands - now routes to full workflow.
     
@@ -750,7 +762,149 @@ def process_email_command(text: str, llm_generate_func=None) -> Optional[Dict]:
         text: User input
         llm_generate_func: Optional LLM generation function for drafting
     """
-    return process_email_workflow(text, llm_generate_func)
+    return await process_email_workflow(text, llm_generate_func)
+
+
+def get_todays_events(max_events: int = 10) -> List[Dict]:
+    """Fetch today's calendar events via Google Calendar API."""
+    # Requires: pip install google-api-python-client google-auth-oauthlib
+    # And setting up OAuth credentials
+    
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    
+    creds_path = os.getenv("GOOGLE_CALENDAR_CREDS", "calendar_creds.json")
+    
+    if not os.path.exists(creds_path):
+        return [{"info": "Calendar not configured"}]
+    
+    try:
+        creds = Credentials.from_authorized_user_file(creds_path)
+        service = build('calendar', 'v3', credentials=creds)
+        
+        # Get today's events
+        now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0).isoformat() + 'Z'
+        today_end = now.replace(hour=23, minute=59, second=59).isoformat() + 'Z'
+        
+        events_result = service.events().list(
+            calendarId='primary',
+            timeMin=today_start,
+            timeMax=today_end,
+            maxResults=max_events,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        events = events_result.get('items', [])
+        
+        return [{
+            "summary": e.get('summary', 'Untitled'),
+            "start": e['start'].get('dateTime', e['start'].get('date')),
+            "end": e['end'].get('dateTime', e['end'].get('date')),
+            "location": e.get('location', '')
+        } for e in events]
+        
+    except Exception as e:
+        return [{"error": str(e)}]
+
+# ============================================================================
+# RSS FEED READER
+# ============================================================================
+async def fetch_rss_feed(feed_url: str, max_items: int = 5) -> str:
+    """Fetch headlines from an RSS feed."""
+    # Requires: pip install feedparser
+    import feedparser
+    
+    try:
+        feed = feedparser.parse(feed_url)
+        
+        if not feed.entries:
+            return "No items found in feed."
+        
+        headlines = []
+        for entry in feed.entries[:max_items]:
+            title = entry.get('title', 'Untitled')
+            link = entry.get('link', '')
+            headlines.append(f"• {title}\n  {link}")
+        
+        return "\n\n".join(headlines)
+        
+    except Exception as e:
+        return f"Error fetching RSS: {e}"
+# ============================================================================
+# Example feeds you might add:
+# ============================================================================
+
+RSS_FEEDS = {
+    "hackernews": "https://hnrss.org/frontpage",
+    "bbc_tech": "http://feeds.bbci.co.uk/news/technology/rss.xml",
+    "coindesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+}
+
+
+# ============================================================================
+# COINGECKO CRYPTO API
+# ============================================================================
+
+async def fetch_crypto_prices(coins: List[str] = ["bitcoin", "bitcoin-sv"]) -> str:
+    """Fetch crypto prices from CoinGecko Pro API."""
+    api_key = os.getenv("COINGECKO_API_KEY")
+    
+    if not api_key:
+        return "⚠️ COINGECKO_API_KEY not configured in .env"
+    
+    try:
+        client = await HTTPClientManager.get_client()
+        ids = ",".join(coins)
+        
+        # Pro API endpoint (use api.coingecko.com for demo keys)
+        # base_url = "https://pro-api.coingecko.com/api/v3/simple/price"
+        base_url = "https://api.coingecko.com/api/v3/simple/price"
+        
+        response = await client.get(
+            base_url,
+            params={
+                "ids": ids,
+                "vs_currencies": "usd",
+                "include_24hr_change": "true",
+                "include_market_cap": "true",
+                "include_24hr_vol": "true"
+            },
+            headers={
+                # "x-cg-pro-api-key": api_key,
+                "x-cg-demo-api-key": api_key,
+                "Accept": "application/json"
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            lines = []
+            for coin, info in data.items():
+                price = info.get("usd", 0)
+                change = info.get("usd_24h_change", 0)
+                mcap = info.get("usd_market_cap", 0)
+                vol = info.get("usd_24h_vol", 0)
+                
+                arrow = "📈" if change > 0 else "📉"
+                lines.append(
+                    f"{coin.upper()}: ${price:,.2f} {arrow} {change:+.2f}% (24h)\n"
+                    f"   Market Cap: ${mcap:,.0f}\n"
+                    f"   24h Volume: ${vol:,.0f}"
+                )
+            
+            return "\n\n".join(lines)
+        
+        elif response.status_code == 401:
+            return "⚠️ Invalid CoinGecko API key"
+        elif response.status_code == 429:
+            return "⚠️ CoinGecko rate limit exceeded"
+        else:
+            return f"⚠️ CoinGecko API error: {response.status_code}"
+        
+    except Exception as e:
+        return f"Error fetching crypto prices: {e}"
 
 # ============================================================================
 # Configuration
@@ -768,13 +922,11 @@ class ServerConfig:
     # Model names
     # ======================================================
     asr_model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b"
-    
     # ======================================================
     # Vllm Model
     # ======================================================
-    llm_model_name: str = "nvidia/Nemotron-Mini-4B-Instruct" # TESTED EFFECIENT
-    
-    #llm_model_name: str = "Qwen_Qwen3-8B"
+    llm_model_name: str = "nvidia/Nemotron-Mini-4B-Instruct"
+    #llm_model_name: str = "/home/gw878/text-gen/user_data/models/Qwen_Qwen3-8B"
     #llm_model_name: str = "Qwen/Qwen3-8B-AWQ"
     #llm_model_name: str = "Qwen/Qwen3-8B-GPTQ"
     #llm_model_name: str = "Qwen/Qwen2.5-7B-Instruct-AWQ"
@@ -3264,6 +3416,30 @@ async def shutdown_event():
     await HTTPClientManager.close()
 
 # ============================================================================
+# Daily Breif LLM Settings
+# ============================================================================
+
+@app.post("/api/summarize-briefing")
+async def summarize_briefing(data: dict):
+    """Use LLM to create a conversational summary of briefing data."""
+    
+    raw_data = data.get("raw_data", "")
+    
+    prompt = f"""You are NEMOTRON, a helpful AI assistant. Summarize this daily briefing 
+data into a friendly, conversational morning message. Keep it concise (under 200 words) 
+but informative. Highlight anything urgent or important.
+
+Data to summarize:
+{raw_data}
+
+Create a natural summary as if you're briefing a friend over coffee:"""
+    
+    # Use your existing LLM generate function
+    response = await generate_llm_response(prompt)
+    
+    return {"summary": response}
+
+# ============================================================================
 # API Endpoints
 # ============================================================================
 
@@ -3294,6 +3470,13 @@ async def health_check():
         tts_engine=models.get_tts_engine(),
         performance=metrics.get_all_stats()
     )
+
+@app.get("/index.html", response_class=HTMLResponse)
+async def root():
+    ui_path = Path(__file__).parent / "index.html"
+    if ui_path.exists():
+        return HTMLResponse(content=ui_path.read_text())
+    return HTMLResponse(content="<h1>Nemotron Agent AI 2026</h1>")
 
 @app.get("/metrics")
 async def get_metrics():
@@ -3329,6 +3512,31 @@ async def chat(request: ChatRequest):
     
     total_start = time.time()
     timings = {}
+
+    # === CHECK EMAIL COMMANDS ===
+    def llm_draft_helper(prompt):
+        return models.generate(prompt, system_prompt="You are a helpful email writing assistant. Write concise, professional emails.")
+
+    email_result = await process_email_command(request.message, llm_generate_func=llm_draft_helper)
+    if email_result:
+        tts_text = email_result.get("summary", "Done.")
+    
+    # Synthesize voice response
+        tts_start = time.time()
+        audio_bytes = models.synthesize(tts_text, speaker_id=request.voice)
+        audio_base64 = base64.b64encode(audio_bytes).decode() if audio_bytes else None
+        timings["tts"] = time.time() - tts_start
+        timings["total"] = time.time() - total_start
+    
+        return ChatResponse(
+            response=email_result.get("summary", ""),
+            thinking=None,
+            audio_base64=audio_base64,
+            timing=timings,
+            command={"type": "email", "action": email_result.get("type")}
+
+        )
+    # === END EMAIL COMMAND CHECK ===
     
     # === CHECK FOR YOUTUBE COMMANDS FIRST ===
     command_payload, _ = process_youtube_command(request.message, None)
@@ -3360,30 +3568,6 @@ async def chat(request: ChatRequest):
         )
     # === END X SPACES COMMAND CHECK ===
     
-    # === CHECK EMAIL COMMANDS ===
-    def llm_draft_helper(prompt):
-        return models.generate(prompt, system_prompt="You are a helpful email writing assistant. Write concise, professional emails.")
-
-    email_result = process_email_command(request.message, llm_generate_func=llm_draft_helper)
-    if email_result:
-        tts_text = email_result.get("summary", "Done.")
-    
-    # Synthesize voice response
-        tts_start = time.time()
-        audio_bytes = models.synthesize(tts_text, speaker_id=request.voice)
-        audio_base64 = base64.b64encode(audio_bytes).decode() if audio_bytes else None
-        timings["tts"] = time.time() - tts_start
-        timings["total"] = time.time() - total_start
-    
-        return ChatResponse(
-            response=email_result.get("summary", ""),
-            thinking=None,
-            audio_base64=audio_base64,
-            timing=timings,
-            command={"type": "email", "action": email_result.get("type")}
-        )
-    # === END EMAIL COMMAND CHECK ===
-
     # === Image analysis  ===
     image_description = None
     if request.image_data:
@@ -3539,7 +3723,8 @@ async def chat_speak(request: ChatRequest):
         thinking=chat_response.thinking,
         audio_base64=audio_base64,
         image_description=chat_response.image_description,
-        timing=timings
+        timing=timings,
+        command=chat_response.command
     )
 
 @app.post("/transcribe")
@@ -3871,7 +4056,7 @@ def get_unread_emails(max_emails: int = 5) -> List[Dict]:
         return [{"error": str(e)}]
 
 
-def process_email_workflow(text: str, llm_generate_func=None) -> Optional[Dict]:
+async def process_email_workflow(text: str, llm_generate_func=None) -> Optional[Dict]:
     """
     Process email workflow commands.
     
@@ -3892,7 +4077,8 @@ def process_email_workflow(text: str, llm_generate_func=None) -> Optional[Dict]:
         
         # --- Check emails  ---
         if EMAIL_CHECK_PATTERN.search(text):
-            emails = get_unread_emails(5)
+            #emails = get_unread_emails(5)
+            emails = await asyncio.to_thread(get_unread_emails, 5)
             
             if not emails or "error" in emails[0]:
                 return {"type": "email_error", "summary": "I couldn't check your email. Please try again."}
@@ -3921,6 +4107,18 @@ def process_email_workflow(text: str, llm_generate_func=None) -> Optional[Dict]:
         read_it = EMAIL_READ_IT.search(text)
         
         if read_match or read_first or read_it:
+            # [FIX START] Auto-refresh cache if missing
+            if not email_session.cached_emails:
+                print("📧 Cache empty, fetching unread emails for read command...")
+                emails = get_unread_emails(5)
+                # Check for error or empty *after* fetch
+                if not emails or "error" in emails[0] or "info" in emails[0]:
+                    return {
+                        "type": "email_error",
+                        "summary": "I couldn't find any unread emails to read."
+                    }
+                email_session.cached_emails = emails
+
             # Determine which email
             if read_first:
                 email_num = 1
@@ -4804,12 +5002,24 @@ Examples:
                         help="TTS engine: magpie (HD quality) or nemo (fast)")
     parser.add_argument("--voice", type=str, default=None,
                         help="Default voice (Magpie: Sofia, Aria, John, Jason, Leo)")
+
+    # Transcribe Options
+    parser.add_argument("--whisper", action="store_true", 
+                        help="Use Whisper instead of Canary for transcription")
+    parser.add_argument("--whisper-size", type=str, default=None,
+                        choices=["tiny", "base", "small", "medium", "large-v3"],
+                        help="Whisper model size (default: medium)")
     
     # Utility
     parser.add_argument("--list-models", action="store_true",
                         help="List available GGUF models and exit")
     
     args = parser.parse_args()
+
+    if args.whisper:
+        config.use_canary = False
+    if args.whisper_size:
+        config.whisper_model_size = args.whisper_size
     
     # Handle --list-models
     if args.list_models:
